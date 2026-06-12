@@ -1,0 +1,162 @@
+# VisualLM
+
+VisualLM turns any STEM question, equation, or idea into a custom **animated 2D
+or 3D explanation**. Instead of picking from a handful of fixed demos, the AI
+*writes the animation itself* — generating JavaScript that runs in a locked-down
+sandbox in your browser — so it can visualize essentially any topic.
+
+## How it works
+
+```
+prompt ──▶ /api/visualize ──▶ AI writes scene code ──▶ sandbox renders it
+                                      │                        │
+                     (Claude ▸ ChatGPT ▸ Gemini ▸ Ollama)      │
+                                                        error? └─▶ /api/repair ──┐
+                                                                                  │
+                                                       fixed code ◀───────────────┘
+```
+
+1. **You type** an equation (`z = sin(x) * cos(y)`) or an idea ("show how a
+   Fourier series builds a square wave"), and optionally prefer 2D or 3D.
+2. **The AI generates animation code** — the body of a `scene(ctx, t)`
+   function — using a documented helper library (`H`) for 2D plotting, **solid
+   shaded 3D surfaces, parametric meshes, spheres**, vectors, and labels.
+3. **The sandbox runs it** in a dedicated Web Worker with an OffscreenCanvas.
+   The worker has no DOM, no same-origin window, and no network, so generated
+   code can't touch your machine. If code hangs, the worker is terminated and
+   restarted.
+4. **Self-repair loop:** if the generated code throws, the exact error is sent
+   back to the model, which returns corrected code. Up to three automatic repairs.
+5. **Tutor chat** answers follow-up questions, grounded in the exact scene on
+   screen.
+
+**3D scenes are interactive:** drag the canvas to orbit, scroll to zoom,
+double-click to reset the view.
+
+## Real 3D, not point clouds
+
+The sandbox ships a software 3D pipeline the AI is trained (in-context) to use:
+
+- `H.surface3d(cam, (x,y) => h, …)` — solid, light-shaded, depth-sorted
+  height surfaces for anything of the form z = f(x, y).
+- `H.mesh3d(cam, (u,v) => [x,y,z], …)` — parametric surfaces: spheres, tori,
+  cylinders, tubes, ribbons, Möbius strips.
+- `cam.sphere / cam.line / cam.path / cam.poly / cam.grid / cam.axes` —
+  shaded balls (molecules, planets), 3D trajectories, filled polygons, and
+  spatial reference geometry.
+
+The system prompt teaches the model when to choose 3D (surfaces, orbits,
+molecules, fields in space) versus 2D (single-variable functions, circuits,
+graphs, planar geometry), and worked examples show exactly how to use the
+pipeline.
+
+## Brains (multi-provider)
+
+Generation tries providers in this order — the first one with a key wins:
+
+| Provider | Enable with | Role |
+| --- | --- | --- |
+| **Claude** | `ANTHROPIC_API_KEY` (+ `pip install anthropic`) | Primary generator — best quality |
+| **ChatGPT** | `OPENAI_API_KEY` | Cloud fallback generator |
+| **Gemini** | `GEMINI_API_KEY` | Cloud fallback generator |
+| **Ollama** | run `ollama serve` locally | Offline fallback + default tutor |
+
+All cloud providers are called over plain REST — no extra SDKs required.
+
+## Run locally
+
+```bash
+# 1. (Recommended) enable at least one cloud generator
+pip install -r requirements.txt          # only needed for Claude
+export ANTHROPIC_API_KEY=sk-ant-...      # and/or OPENAI_API_KEY / GEMINI_API_KEY
+
+# 2. (Optional) local fallback + tutor: run Ollama with a model
+ollama pull qwen2.5:7b
+
+# 3. Start the app
+python3 main.py
+```
+
+Then open <http://127.0.0.1:4173>.
+
+## Deploy to the web
+
+The repo is deploy-ready for any Docker host. The server reads `PORT` and
+binds `0.0.0.0` automatically when it's set.
+
+### Render (one click, free tier)
+
+1. Push this repo to GitHub (already done if you're reading this there).
+2. In the [Render dashboard](https://dashboard.render.com), **New → Blueprint**,
+   pick this repo — `render.yaml` configures everything.
+3. In the service's **Environment** tab, set `ANTHROPIC_API_KEY` (or
+   `OPENAI_API_KEY` / `GEMINI_API_KEY`).
+4. Strongly recommended for a public URL: set `VISUALLM_ACCESS_CODE` to any
+   secret phrase. Visitors are asked for it once before they can generate, so
+   strangers can't burn your API credits. Per-IP rate limiting is on by
+   default (`VISUALLM_RATE_LIMIT`, 10/min via render.yaml).
+
+### Any other Docker host (Fly.io, Railway, Cloud Run, a VPS…)
+
+```bash
+docker build -t visuallm .
+docker run -p 8080:8080 -e ANTHROPIC_API_KEY=sk-ant-... visuallm
+```
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Covers code sanitization, JSON extraction from model output, blank-scene
+detection, scene normalization, rate limiting, the access-code gate, and real
+HTTP round-trips against every endpoint (with stubbed generators).
+
+## Files
+
+- `main.py` — web server, the four AI bridges (Claude/OpenAI/Gemini/Ollama),
+  scene generation/repair/tutor endpoints, rate limiting, and the system
+  prompt that defines the rendering contract.
+- `sandbox-worker.js` — the sandboxed Web Worker that runs generated code on
+  an OffscreenCanvas, the `H` helper library, and the software 3D pipeline.
+- `app.js` — orchestration: sandbox runner, generate→run→repair loop, orbit
+  controls, playback, tutor chat, resources, status.
+- `index.html` / `styles.css` — app structure and visual design.
+- `Dockerfile` / `render.yaml` — production deployment.
+- `tests/` — stdlib-only test suite.
+
+## API
+
+- `POST /api/visualize` `{prompt, preferred_mode}` → a scene (`title`, `tag`,
+  `dimension`, `equation`, `summary`, `bullets`, `student_prompts`, `code`).
+- `POST /api/repair` `{prompt, code, error}` → a corrected scene.
+- `POST /api/chat` `{question, visualization, history}` → tutor answer.
+- `GET /api/health` → which backends are available + whether an access code
+  is required.
+- `GET/POST/DELETE /api/resources` — uploaded reference material.
+
+When `VISUALLM_ACCESS_CODE` is set, all POST/DELETE endpoints require the
+`X-Access-Code` header (the UI handles this automatically).
+
+## Environment variables
+
+- `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-8`)
+- `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`) / `OPENAI_BASE_URL`
+- `GEMINI_API_KEY` / `GEMINI_MODEL` (default `gemini-2.0-flash`) / `GEMINI_BASE_URL`
+- `OLLAMA_URL` (default `http://127.0.0.1:11434`) / `OLLAMA_MODEL`
+- `VISUALLM_ACCESS_CODE` — require a shared code for generation (recommended
+  on public deployments).
+- `VISUALLM_RATE_LIMIT` — requests/min per IP (default 20; 0 disables).
+- `VISUALLM_HOST` / `VISUALLM_PORT` — default `127.0.0.1` / `4173` locally;
+  `PORT` (set by cloud hosts) switches to `0.0.0.0`.
+
+## Safety notes
+
+Generated code is treated as untrusted: it runs only inside the Web Worker
+sandbox (no DOM, no same-origin access), and network / sub-worker APIs
+(`fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `Worker`,
+`SharedWorker`, `WebTransport`, `BroadcastChannel`, `navigator.sendBeacon`,
+`importScripts`) are stripped from the worker scope. Runaway code is killed
+by a watchdog. The server sanitizes generated code, rate-limits every AI
+endpoint per client IP, and can gate generation behind an access code.

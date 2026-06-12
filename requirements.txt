@@ -1,0 +1,5 @@
+# VisualLM uses only the Python standard library to run the server.
+# The Anthropic SDK is optional but strongly recommended — it powers the
+# high-quality animation generation. Without it (and an API key) the app
+# falls back to a local Ollama model.
+anthropic>=0.40.0

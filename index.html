@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <!--
+      Defense in depth alongside the worker-side strip in sandbox-worker.js:
+        - script-src 'unsafe-inline' is unavoidable because the theme bootstrap
+          inline script below must run before paint to avoid a flash.
+        - connect-src 'self' blocks page-side fetch to any non-origin URL.
+        - worker-src 'self' blocks blob: sub-workers (paired with Bug #5 strip).
+        - frame-ancestors 'none' prevents clickjacking via iframe embedding.
+      Note: the meta-tag CSP does NOT apply to the Web Worker (it needs
+      response headers for that), so the worker can still use `new Function`
+      to compile generated code.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; worker-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" />
+    <title>VisualLM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=10" />
+    <script>
+      // Apply the saved theme BEFORE the page paints, so there's no flash of
+      // the wrong palette. Default to dark. The toggle in the topbar flips it.
+      (function () {
+        try {
+          var t = localStorage.getItem("visuallm-theme") || "dark";
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          /* localStorage unavailable */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">●</span>
+        <span class="brand-name">VisualLM</span>
+      </div>
+      <div class="topbar-status">
+        <span id="ollamaStatusBadge" class="status-pill pending">Checking…</span>
+        <span id="ollamaModelLabel" class="topbar-meta">Detecting…</span>
+        <button
+          id="themeToggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="Toggle light or dark theme"
+          title="Toggle light / dark theme"
+        ></button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- LEFT: tabbed control panel -->
+      <aside class="panel left-panel">
+        <nav class="tab-bar" role="tablist" aria-label="Control panel sections">
+          <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="explanation">
+            Explanation
+          </button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="examples">
+            Examples &amp; Playback
+          </button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="resources">
+            Resources
+            <span class="tab-count" id="resourceCount" hidden>0</span>
+          </button>
+        </nav>
+
+        <!-- Tab 1: Explanation -->
+        <section class="tab-panel active" data-panel="explanation" role="tabpanel">
+          <div class="meta-grid">
+            <div class="meta-cell">
+              <span class="meta-label">Concept</span>
+              <strong id="detectedTopic">Waiting…</strong>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">Scene</span>
+              <strong id="detectedDimension">Auto</strong>
+            </div>
+            <div class="meta-cell meta-cell-wide">
+              <span class="meta-label">Equation / rule</span>
+              <code id="detectedEquation">—</code>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">What you're seeing</h3>
+            <p id="sceneSummary" class="section-body">
+              Type any STEM idea on the right, then press Visualize. The AI will
+              write a custom animation and explain it here.
+            </p>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">Key points</h3>
+            <ul id="explanationList" class="bullet-list">
+              <li>Generation: Claude writes the animation code from scratch.</li>
+              <li>Sandbox: the code runs in a locked-down Web Worker.</li>
+              <li>Repair loop: errors are caught and fixed automatically.</li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- Tab 2: Examples + Playback -->
+        <section class="tab-panel" data-panel="examples" role="tabpanel" hidden>
+          <div class="panel-section">
+            <h3 class="section-title">Playback</h3>
+            <div class="playback-row">
+              <button id="playPauseButton" type="button" class="ghost-button">Pause</button>
+              <div class="slider-block">
+                <div class="slider-head">
+                  <label for="speedSlider">Speed</label>
+                  <span id="speedValue">1.0×</span>
+                </div>
+                <input id="speedSlider" type="range" min="0.4" max="2.5" step="0.1" value="1" />
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">Try an example</h3>
+            <div class="chip-grid">
+              <button type="button" class="chip" data-prompt="y = sin(x) + 0.35 * sin(3x)">
+                y = sin(x) + 0.35·sin(3x)
+              </button>
+              <button type="button" class="chip" data-prompt="Show a projectile launched at 22 m/s and 58 degrees.">
+                Projectile motion
+              </button>
+              <button type="button" class="chip" data-prompt="Explain the derivative of y = 0.15x^3 - x with a tangent line.">
+                Derivative &amp; tangent
+              </button>
+              <button type="button" class="chip" data-prompt="Visualize electric field lines around a dipole.">
+                Electric field
+              </button>
+              <button type="button" class="chip" data-prompt="z = sin(sqrt(x^2 + y^2)) / sqrt(x^2 + y^2)">
+                3D surface
+              </button>
+              <button type="button" class="chip" data-prompt="Show the structure of DNA as a 3D animation.">
+                DNA helix
+              </button>
+              <button type="button" class="chip" data-prompt="Animate BFS on a graph.">
+                BFS traversal
+              </button>
+              <button type="button" class="chip" data-prompt="Show how a Fourier series builds a square wave.">
+                Fourier series
+              </button>
+              <button type="button" class="chip" data-prompt="Animate gradient descent rolling down a 2D loss surface.">
+                Gradient descent
+              </button>
+              <button type="button" class="chip" data-prompt="Visualize an RC circuit charging a capacitor over time.">
+                RC circuit
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab 3: Resources -->
+        <section class="tab-panel" data-panel="resources" role="tabpanel" hidden>
+          <div class="panel-section">
+            <h3 class="section-title">Reference material</h3>
+            <p class="section-body">
+              Upload notes, problem sets, lecture excerpts, or code. The AI uses
+              them as context when generating the animation and answering your
+              questions, so explanations stay grounded in your material.
+            </p>
+          </div>
+
+          <label class="drop-zone" id="dropZone">
+            <input id="resourceFileInput" type="file" multiple
+              accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
+            <strong>Drop files here or click to upload</strong>
+            <span>Text-based files only (.txt, .md, .csv, .json, .py, .js, …) — up to 60K characters each.</span>
+          </label>
+
+          <div class="resource-list" id="resourceList" hidden></div>
+          <p class="resource-empty" id="resourceEmpty">
+            No resources yet. Anything you upload here will be visible to the
+            tutor and the animation generator.
+          </p>
+        </section>
+      </aside>
+
+      <!-- CENTER: visualization stage -->
+      <section class="panel stage-panel">
+        <div class="canvas-frame">
+          <div class="canvas-overlay">
+            <span id="sceneTag">AI Planner</span>
+            <span id="sceneConfidence" role="status" aria-live="polite" aria-atomic="true">Idle — type a prompt to begin.</span>
+          </div>
+          <span id="orbitHint" class="orbit-hint" hidden>drag to orbit · scroll to zoom · double-click to reset</span>
+        </div>
+      </section>
+
+      <!-- RIGHT: prompt -->
+      <aside class="panel right-panel">
+        <div class="panel-header">
+          <h2>Prompt</h2>
+          <p>Describe the idea or give an equation.</p>
+        </div>
+
+        <label class="sr-only" for="promptInput">Prompt</label>
+        <textarea id="promptInput" spellcheck="false" rows="6">
+Explain heat diffusion across a metal plate and show how the temperature changes over space.</textarea>
+
+        <div class="mode-picker">
+          <span class="mode-label">Prefer</span>
+          <div class="segmented-control" role="radiogroup" aria-label="Scene mode">
+            <button class="mode-button active" type="button" role="radio" aria-checked="true" data-mode="auto">Auto</button>
+            <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="2d">2D</button>
+            <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="3d">3D</button>
+          </div>
+        </div>
+
+        <div class="composer-actions">
+          <button id="visualizeButton" type="button" class="action-button primary">Visualize</button>
+          <button id="randomButton" type="button" class="action-button secondary">Surprise me</button>
+        </div>
+
+        <div class="prompt-foot">
+          <p class="hint">Cmd/Ctrl + Enter to run. The sandbox renders in the center.</p>
+        </div>
+      </aside>
+    </main>
+
+    <!-- BOTTOM: tutor -->
+    <section class="panel tutor-panel">
+      <div class="tutor-header">
+        <h2>AI Tutor</h2>
+        <p>Ask anything about the current scene. Answers stay grounded in the animation and your uploaded resources.</p>
+      </div>
+
+      <div class="tutor-grid">
+        <div class="chat-column">
+          <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+          <form id="chatForm" class="chat-composer">
+            <label class="sr-only" for="chatInput">Ask the tutor</label>
+            <textarea id="chatInput" spellcheck="true"
+              placeholder="Ask why the curve bends, what each force means, or how to solve a similar problem."></textarea>
+            <div class="chat-actions">
+              <p id="chatHint" class="chat-hint">The tutor uses the current visualization as context.</p>
+              <button id="sendChatButton" type="submit" class="action-button primary">Ask</button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="chat-sidebar">
+          <h3 class="section-title">Quick questions</h3>
+          <div id="chatSuggestions" class="suggestion-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <script src="./app.js?v=10"></script>
+  </body>
+</html>

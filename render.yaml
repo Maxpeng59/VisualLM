@@ -1,0 +1,22 @@
+# Render.com Blueprint — deploy VisualLM with one click:
+# https://render.com/deploy (point it at this repository)
+#
+# After the first deploy, set at least one AI key in the Render dashboard
+# (Environment tab): ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.
+services:
+  - type: web
+    name: visuallm
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false # set in dashboard — never committed
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: VISUALLM_ACCESS_CODE
+        sync: false # optional: require a shared code to generate
+      - key: VISUALLM_RATE_LIMIT
+        value: "10" # requests/min per IP — protects your API credits
