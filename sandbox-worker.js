@@ -400,8 +400,39 @@ function makeHelpers() {
           });
           return view;
         },
+        /* Data-space drawing. Models naturally write `v.line(x1,y1,x2,y2)`
+         * meaning math coordinates — these make that correct instead of a
+         * fatal "not a function". */
+        line(x1, y1, x2, y2, opts) {
+          H.line(X(x1), Y(y1), X(x2), Y(y2), opts);
+          return view;
+        },
+        arrow(x1, y1, x2, y2, opts) {
+          H.arrow(X(x1), Y(y1), X(x2), Y(y2), opts);
+          return view;
+        },
+        text(str, xv, yv, opts) {
+          H.text(str, X(xv), Y(yv), opts);
+          return view;
+        },
+        circle(xv, yv, r, opts) {
+          H.circle(X(xv), Y(yv), r, opts); // r stays in pixels
+          return view;
+        },
+        path(points, opts) {
+          if (!points || !points.length) return view;
+          H.path(points.map((p) => [X(p[0]), Y(p[1])]), opts);
+          return view;
+        },
+        rect(xv, yv, w, h, opts) {
+          // (xv, yv) is the lower-left corner in data coords; w/h in data units.
+          H.rect(X(xv), Y(yv + h), X(xv + w) - X(xv), Y(yv) - Y(yv + h), opts);
+          return view;
+        },
       };
-      return view;
+      // Same tolerance as H itself: an invented view method becomes a no-op
+      // instead of killing the whole frame with "v.foo is not a function".
+      return wrapHelpers(view);
     },
 
     /* 3D camera. project([x,y,z]) -> {x, y, depth, f}. Larger depth = farther
@@ -567,7 +598,8 @@ function makeHelpers() {
           return cam;
         },
       };
-      return cam;
+      // Invented cam methods degrade to no-ops, like H and plot2d views.
+      return wrapHelpers(cam);
     },
 
     /* Solid, lit, depth-sorted height surface: screenHeight = f(x, y).

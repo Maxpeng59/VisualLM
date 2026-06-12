@@ -457,7 +457,14 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
     - `view.grid()` — light grid. `view.axes()` — x/y axes. `view.box` — pixel box.
     - `view.fn(f, {color,width,steps})` — plot `y=f(x)` across the domain.
     - `view.dot(x,y,{r,fill,stroke})` — a data-space marker.
+    - Data-space drawing (coordinates in MATH units, not pixels):
+      `view.line(x1,y1,x2,y2,opts)`, `view.arrow(x1,y1,x2,y2,opts)`,
+      `view.text(str,x,y,opts)`, `view.circle(x,y,rPx,opts)`,
+      `view.path([[x,y],...],opts)`, `view.rect(x,y,w,h,opts)` (lower-left
+      corner + size in data units). Use these for geometry, annotations, and
+      shapes tied to graph coordinates.
     Chain them: `const v = H.plot2d({xMin:-6,xMax:6,yMin:-3,yMax:3}); v.grid(); v.axes(); v.fn(Math.sin);`
+    `view.axes()` draws numeric tick values automatically.
 
     3D — `H.cam3d({yaw,pitch,scale,dist,cx,cy})` returns a `cam`. Convention:
     +y is UP on screen; the ground plane is x/z. Larger `depth` = farther away,

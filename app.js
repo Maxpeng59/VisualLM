@@ -341,7 +341,7 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=11");
+      const worker = new Worker("./sandbox-worker.js?v=12");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
