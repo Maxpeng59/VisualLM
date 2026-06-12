@@ -833,6 +833,18 @@ function niceStep(range) {
 
 let HELP = null;
 
+/* Safety net for a common model mistake: referencing `cam` / `view` / `v`
+ * without creating them first (previously a fatal ReferenceError that burned
+ * the whole repair budget). These globals provide sane defaults; code that
+ * properly declares `const cam = H.cam3d({...})` shadows them cleanly, same
+ * as the `H` global. */
+function seedConvenienceGlobals() {
+  if (!HELP) return;
+  self.cam = HELP.cam3d({});
+  self.view = HELP.plot2d({});
+  self.v = self.view;
+}
+
 /* Wrap the helper object in a Proxy that returns a harmless no-op for any
  * helper the model invents but we don't ship. Without this, a single
  * `H.spinner()`-style typo blanks the whole frame; with it, the rest of the
@@ -925,6 +937,7 @@ self.onmessage = (e) => {
       ctx = canvas.getContext("2d");
       ctx.scale(dpr, dpr);
       HELP = wrapHelpers(makeHelpers());
+      seedConvenienceGlobals();
       post({ type: "ready" });
       break;
     }
@@ -940,6 +953,7 @@ self.onmessage = (e) => {
       canvas.height = Math.round(logicalH * dpr);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(dpr, dpr);
+      seedConvenienceGlobals(); // defaults capture canvas center/box at creation
       break;
     }
     case "run": {

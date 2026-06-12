@@ -341,7 +341,7 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=12");
+      const worker = new Worker("./sandbox-worker.js?v=13");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
@@ -559,6 +559,19 @@
 
   const MAX_REPAIRS = 3;
 
+  // Guaranteed-renderable placeholder for when generation + all repairs fail.
+  // Without it the canvas sits dead-black under the error message.
+  const CLIENT_FALLBACK_CODE = [
+    'H.background();',
+    'H.text("Couldn\'t render this prompt", 28, 40, { color: H.colors.ink, size: 20, weight: 700 });',
+    'H.text("The model\'s code kept failing. Rephrase the prompt or try again.", 28, 64, { color: H.colors.sub, size: 13 });',
+    'const cx = H.W / 2, cy = H.H / 2 + 20;',
+    'const r = 60 + 16 * Math.sin(t * 1.5);',
+    'H.circle(cx, cy, r, { stroke: H.colors.accent, width: 3 });',
+    'H.circle(cx, cy, r * 0.6, { stroke: H.colors.accent2, width: 2 });',
+    'H.circle(cx, cy, 6, { fill: H.colors.ink });',
+  ].join("\n");
+
   const ENGINE_NAMES = {
     claude: "Claude",
     openai: "ChatGPT",
@@ -667,6 +680,12 @@
               "Try a different prompt, or set ANTHROPIC_API_KEY for the stronger Claude generator.",
             "warn"
           );
+          // Don't leave a dead-black canvas under the error message.
+          try {
+            await runner.run(CLIENT_FALLBACK_CODE);
+          } catch (fallbackErr) {
+            /* placeholder is hand-written and can't realistically fail */
+          }
           return;
         }
         setConfidence(
