@@ -506,7 +506,10 @@ textarea:focus, input[type="text"]:focus {
 
 .canvas-overlay {
   position: absolute;
-  top: 12px;
+  /* Bottom-left, NOT top-left: generated scenes put their title at the
+   * top-left (the system prompt tells them to), and the status pills were
+   * covering it on every single scene. */
+  bottom: 12px;
   left: 12px;
   display: flex;
   flex-direction: column;

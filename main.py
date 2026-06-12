@@ -584,6 +584,19 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
 
     Make the code correct and defensive: guard against division by zero, NaN, and
     values outside the visible range. The animation must never throw.
+
+    Correctness rules that are easy to get wrong:
+    - Physically nonnegative quantities (lengths, areas, radii, masses,
+      probabilities, concentrations) must NEVER display as negative. Don't
+      animate them with a bare Math.sin(t) — use a form that stays positive,
+      e.g. `2 + Math.sin(t)` or `Math.abs(...)`, and sanity-check every live
+      readout you print.
+    - Generated code receives NO mouse or keyboard input. Never claim the
+      scene is interactive ("drag the vertices", "click to...") in the code,
+      summary, or bullets. The ONLY interactivity is the built-in camera
+      orbit on 3D scenes, which the app provides automatically.
+    - Make sure the numbers you display are consistent with the picture: if
+      the readout says a = 3.0, the drawn length must actually be 3 units.
     """
 ).strip()
 
