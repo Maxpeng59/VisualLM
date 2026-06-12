@@ -342,6 +342,31 @@ function makeHelpers() {
           ctx.moveTo(X(x0), box.y);
           ctx.lineTo(X(x0), box.y + box.h);
           ctx.stroke();
+          // Numeric tick labels. Scenes without axis values read as a vague
+          // picture instead of a graph, so these are on by default
+          // (opts.ticks === false disables them for stylized scenes).
+          if (opts.ticks !== false) {
+            const stepX = opts.stepX || niceStep(xMax - xMin);
+            const stepY = opts.stepY || niceStep(yMax - yMin);
+            const fmt = (v) =>
+              Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0)
+                ? v.toExponential(0)
+                : +v.toFixed(2) + "";
+            ctx.fillStyle = opts.tickColor || COLORS.sub;
+            ctx.font = "11px 'Inter', sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "top";
+            for (let gx = Math.ceil(xMin / stepX) * stepX; gx <= xMax + 1e-9; gx += stepX) {
+              if (Math.abs(gx) < stepX * 1e-6) continue; // skip 0 (origin clutter)
+              ctx.fillText(fmt(gx), X(gx), Y(y0) + 5);
+            }
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            for (let gy = Math.ceil(yMin / stepY) * stepY; gy <= yMax + 1e-9; gy += stepY) {
+              if (Math.abs(gy) < stepY * 1e-6) continue;
+              ctx.fillText(fmt(gy), X(x0) - 6, Y(gy));
+            }
+          }
           ctx.restore();
           return view;
         },
@@ -505,8 +530,9 @@ function makeHelpers() {
           }
           return cam;
         },
-        axes(len) {
-          len = len || 3;
+        axes(len, opts) {
+          len = Number.isFinite(len) && len > 0 ? Math.min(len, 1000) : 3;
+          opts = opts || {};
           const o0 = cam.project([0, 0, 0]);
           const ax = [
             [[len, 0, 0], COLORS.accent, "x"],
@@ -518,6 +544,26 @@ function makeHelpers() {
             H.arrow(o0.x, o0.y, p.x, p.y, { color: c, width: 2 });
             H.text(label, p.x + 4, p.y - 4, { color: c, size: 13 });
           });
+          // Unit tick marks + numbers so 3D scenes have a readable scale.
+          // Skipped for long axes (labels would smear together).
+          if (opts.ticks !== false && len <= 12) {
+            const step = len > 6 ? 2 : 1;
+            for (let v = step; v <= len - step * 0.5; v += step) {
+              ax.forEach(([dir, c]) => {
+                const u = [
+                  (dir[0] / len) * v,
+                  (dir[1] / len) * v,
+                  (dir[2] / len) * v,
+                ];
+                const p = cam.project(u);
+                H.circle(p.x, p.y, 1.6, { fill: c });
+                H.text(String(v), p.x + 3, p.y - 3, {
+                  color: COLORS.sub,
+                  size: 10,
+                });
+              });
+            }
+          }
           return cam;
         },
       };

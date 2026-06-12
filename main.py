@@ -390,6 +390,32 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
     If your scene doesn't contain `H.background` AND at least 3 other `H.*`
     drawing calls, the renderer treats it as a failed generation.
 
+    ### Rule 1 — every scene MUST MOVE
+
+    `scene` is called ~60 times per second; the picture only animates if your
+    code reads `t`. Scenes that never use `t` are rejected as static images.
+    - Drive at least one PRIMARY element from `t`: a moving particle, a
+      propagating wave, a sweeping tangent/angle, a growing sum, a rotating
+      camera (`cam.yaw = 0.3 * t`), oscillating values.
+    - If the concept itself is static (a structure, a proof, a shape), animate
+      the EXPLANATION: sweep the highlight through the parts, pulse the region
+      being discussed, orbit the camera, or step through stages with
+      `const phase = Math.floor(t % 9 / 3);`.
+
+    ### Rule 2 — every scene MUST BE LABELED with real values
+
+    A picture without numbers teaches nothing. Scenes with zero `H.text`
+    calls are rejected.
+    - Title (H.text, size 18, weight 700) at the top-left + a one-line caption
+      under it (size 13, H.colors.sub).
+    - `view.axes()` (2D) and `cam.axes(len)` (3D) draw numeric tick values
+      automatically — use them whenever the scene has coordinates.
+    - Label the key quantities ON the drawing (axis names, point coordinates,
+      vector names, units).
+    - Include at least one LIVE READOUT that changes with `t`, e.g.
+      `H.text("E = " + energy.toFixed(2) + " J", 24, 76, { color: H.colors.sub, size: 13 });`
+    - With 2+ colored elements, add `H.legend([{label, color}, ...], x, y)`.
+
     ### Other hard rules — code that violates these will be REJECTED
 
     The following patterns break the sandbox. Do not produce them under any
@@ -1035,6 +1061,62 @@ def code_paints_something(code: str) -> bool:
     return any(needle in code for needle in _DRAWING_CALLS)
 
 
+# `scene(ctx, t)` is called ~60×/s, but the picture only moves if the code
+# actually reads `t`. A bare-word regex is enough: any real use (t * 0.5,
+# Math.sin(t), f(x + t)) matches, while identifiers that merely contain a
+# t (theta, tris, point) don't.
+_T_USAGE_RE = re.compile(r"\bt\b")
+
+# Helpers that put words/numbers on screen. Scenes with zero of these are
+# unlabeled pictures — no title, no values — which defeats the teaching goal.
+_LABEL_CALLS = ("H.text", "H.legend", "fillText")
+
+
+def code_is_animated(code: str) -> bool:
+    return bool(_T_USAGE_RE.search(code or ""))
+
+
+def code_has_labels(code: str) -> bool:
+    return any(needle in (code or "") for needle in _LABEL_CALLS)
+
+
+def scene_problems(code: str) -> list[str]:
+    """Quality gate for generated code: [] means good to ship.
+
+    "blank" is fatal (nothing on screen); "static" and "unlabeled" are
+    quality problems worth a regeneration but acceptable as a last resort.
+    """
+    if not code_paints_something(code):
+        return ["blank"]
+    problems = []
+    if not code_is_animated(code):
+        problems.append("static")
+    if not code_has_labels(code):
+        problems.append("unlabeled")
+    return problems
+
+
+_PROBLEM_HINTS = {
+    "blank": (
+        "the code never called any drawing helper, so the canvas was BLANK. "
+        "You MUST call H.background() first and then several drawing helpers "
+        "(H.text/H.line/H.path/H.circle/plot2d/.fn/H.surface3d/...)."
+    ),
+    "static": (
+        "the code never used the time parameter `t`, so NOTHING MOVED. Drive "
+        "at least one visible element from `t` every frame — a moving point, "
+        "a propagating wave, a sweeping angle, a rotating camera "
+        "(cam.yaw = 0.3 * t), or a live numeric readout."
+    ),
+    "unlabeled": (
+        "the scene had NO text labels. Add a title with H.text at the top-left, "
+        "label the key quantities on screen, and include at least one live "
+        "readout that updates with `t`, e.g. "
+        'H.text("v = " + v.toFixed(2), 24, 76, {color: H.colors.sub}).'
+    ),
+}
+
+
 def normalize_scene(plan: dict, prompt: str) -> dict:
     def s(key, default=""):
         v = plan.get(key)
@@ -1117,32 +1199,35 @@ def _fallback_scene(prompt: str, reason: str) -> dict:
 
 
 def _try_generate(fn, prompt: str, preferred_mode: str, label: str) -> dict:
-    """Generate once and reject blank scenes — retry up to twice with a hint.
+    """Generate once, run the quality gate, and retry with targeted feedback.
 
-    The local 7B model often writes scenes that compile fine but never call
-    any drawing helper, so the canvas stays black. Detecting that here and
-    retrying with an explicit "you MUST call drawing helpers" reminder turns
-    most of those failures into usable scenes.
+    Three failure tiers, detected syntactically (we can't run JS here):
+      blank      — no drawing call at all. Never shippable; after three
+                   blank attempts we raise (caller may fall back).
+      static     — never reads `t`, so the "animation" is a still image.
+      unlabeled  — no text anywhere: no title, no values, no readouts.
+    static/unlabeled trigger a regeneration with a hint naming exactly what
+    was missing; if the last attempt still has them, we ship it anyway and
+    annotate the scene so the UI can tell the user.
     """
-    last_blank = None
+    best_imperfect = None  # most recent paints-but-imperfect scene
     for attempt in range(3):
         scene = normalize_scene(fn(prompt, preferred_mode), prompt)
-        if code_paints_something(scene.get("code", "")):
+        problems = scene_problems(scene.get("code", ""))
+        if not problems:
             if attempt > 0:
                 # Annotate so the UI can surface what happened.
-                scene["recovered_after_blank"] = attempt
+                scene["recovered_after_retry"] = attempt
             return scene
-        last_blank = scene
-        # Reprompt with a stronger reminder by appending to the user-visible
-        # prompt. Models reliably do better on the second try with this hint.
-        prompt = (
-            prompt
-            + "\n\nCRITICAL REMINDER: the previous attempt produced code that "
-            "never called any drawing helper. The canvas was BLANK. You MUST "
-            "call at least H.background() once and then make multiple H.text/"
-            "H.line/H.path/H.circle/H.rect/H.arrow/plot2d/.fn calls. Drive "
-            "motion off `t`. Do not output setup-only code."
-        )
+        if problems != ["blank"]:
+            scene["quality_warnings"] = problems
+            best_imperfect = scene
+        # Reprompt with feedback naming exactly what was wrong. Models
+        # reliably do better on the second try with a targeted hint.
+        complaints = " ALSO, ".join(_PROBLEM_HINTS[p] for p in problems)
+        prompt = prompt + "\n\nCRITICAL FEEDBACK on your previous attempt: " + complaints
+    if best_imperfect is not None:
+        return best_imperfect
     raise RuntimeError(
         f"{label} produced a blank scene three times — the code didn't call "
         f"any drawing helper. Try a different prompt, or use Claude for "

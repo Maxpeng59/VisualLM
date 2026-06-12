@@ -82,6 +82,57 @@ class PaintDetectionTests(unittest.TestCase):
         self.assertFalse(main.code_paints_something(""))
 
 
+class QualityGateTests(unittest.TestCase):
+    def test_animated_detection(self):
+        self.assertTrue(main.code_is_animated("const a = Math.sin(t * 0.5);"))
+        self.assertTrue(main.code_is_animated("cam.yaw = 0.3 * t;"))
+        # identifiers merely containing "t" don't count
+        self.assertFalse(main.code_is_animated("const theta = 1; tris.sort();"))
+        self.assertFalse(main.code_is_animated(""))
+
+    def test_label_detection(self):
+        self.assertTrue(main.code_has_labels('H.text("v = 1", 1, 2);'))
+        self.assertTrue(main.code_has_labels("H.legend([{label:'a',color:'red'}], 1, 2);"))
+        self.assertFalse(main.code_has_labels("H.line(0,0,1,1);"))
+
+    def test_scene_problems_tiers(self):
+        self.assertEqual(main.scene_problems("const a = 1;"), ["blank"])
+        good = 'H.background(); H.text("x = " + t.toFixed(1), 1, 2); H.line(0,0,1,1);'
+        self.assertEqual(main.scene_problems(good), [])
+        static_unlabeled = "H.background(); H.line(0,0,1,1); H.circle(1,2,3,{});"
+        self.assertEqual(main.scene_problems(static_unlabeled), ["static", "unlabeled"])
+
+    def test_try_generate_retries_with_feedback_then_succeeds(self):
+        prompts_seen = []
+
+        def fake_generator(prompt, mode):
+            prompts_seen.append(prompt)
+            if len(prompts_seen) == 1:
+                return {"code": "H.background(); H.line(0,0,1,1); H.circle(1,2,3,{});"}
+            return {"code": 'H.background(); H.line(0,0,1,1); H.text("v=" + t, 1, 2);'}
+
+        scene = main._try_generate(fake_generator, "orig", "auto", "Test")
+        self.assertEqual(scene["recovered_after_retry"], 1)
+        self.assertNotIn("quality_warnings", scene)
+        # The retry prompt must name the actual problems.
+        self.assertIn("NOTHING MOVED", prompts_seen[1])
+        self.assertIn("NO text labels", prompts_seen[1])
+
+    def test_try_generate_ships_imperfect_scene_as_last_resort(self):
+        def always_static(prompt, mode):
+            return {"code": "H.background(); H.line(0,0,1,1); H.circle(1,2,3,{});"}
+
+        scene = main._try_generate(always_static, "orig", "auto", "Test")
+        self.assertEqual(scene["quality_warnings"], ["static", "unlabeled"])
+
+    def test_try_generate_raises_after_three_blanks(self):
+        def always_blank(prompt, mode):
+            return {"code": "const a = 1;"}
+
+        with self.assertRaises(RuntimeError):
+            main._try_generate(always_blank, "orig", "auto", "Test")
+
+
 class NormalizeSceneTests(unittest.TestCase):
     def test_dimension_normalization(self):
         scene = main.normalize_scene({"dimension": "3d surface"}, "p")
