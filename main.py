@@ -43,6 +43,16 @@ PREFERRED_MODELS = (
 
 # --- Claude (cloud) is the primary brain for generating animation code. ---
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+# Generation depth/latency lever. Opus 4.8 effort levels: low|medium|high|xhigh|max.
+# Default "high": code-gen for novel STEM scenes is intelligence-sensitive, and
+# correct first-try code is precisely what AVOIDS the slow client-side repair
+# loop. Set VISUALLM_CLAUDE_EFFORT=medium to trade a little quality for speed.
+ANTHROPIC_EFFORT = os.environ.get("VISUALLM_CLAUDE_EFFORT", "high").strip() or "high"
+# Hard per-response ceiling (the model isn't aware of it). A scene is a few KB of
+# code plus short text, so 32k is generous headroom for thinking + output; lower
+# it only if you need to cap cost. Too low risks truncated JSON -> a parse error
+# that the caller counts as a failed generation.
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("VISUALLM_CLAUDE_MAX_TOKENS", "32000"))
 
 # --- OpenAI / Gemini are optional cloud fallbacks (key = enabled). ---
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
@@ -649,10 +659,10 @@ def claude_call_scene(user_blocks: list[dict]) -> dict:
 
     with client.messages.stream(
         model=ANTHROPIC_MODEL,
-        max_tokens=32000,
+        max_tokens=ANTHROPIC_MAX_TOKENS,
         thinking={"type": "adaptive"},
         output_config={
-            "effort": "high",
+            "effort": ANTHROPIC_EFFORT,
             "format": {"type": "json_schema", "schema": SCENE_SCHEMA},
         },
         system=[
@@ -686,12 +696,58 @@ def generate_with_claude(prompt: str, preferred_mode: str) -> dict:
     return claude_call_scene([{"type": "text", "text": user_text}])
 
 
+def _repair_hint(error: str) -> str:
+    """Turn a sandbox error into a targeted fix instruction.
+
+    The repair loop's worst failure mode is the model *rewriting the whole
+    scene* and introducing a different bug — so every hint ends with a
+    minimal-change directive. The error-class prefix points the model straight
+    at the fault. Substring match: sandbox error messages aren't structured.
+    """
+    e = (error or "").lower()
+    if "is not defined" in e:
+        specific = (
+            "A name was used before it was declared (usually a typo). Declare it "
+            "with const/let, or fix the misspelling. Do NOT add other new names."
+        )
+    elif "is not a function" in e:
+        specific = (
+            "You called something that isn't a real helper. Use ONLY the helpers "
+            "from the contract above (H.*, the plot2d view methods, the cam3d "
+            "methods). Delete or replace the invalid call."
+        )
+    elif "cannot read" in e and ("undefined" in e or "null" in e):
+        specific = (
+            "You read a property of undefined/null. Guard the access — confirm "
+            "the value exists and any array index is in range before using it."
+        )
+    elif "is not iterable" in e:
+        specific = (
+            "You looped over or spread a non-array. Ensure the value is an array "
+            "(default to []) before iterating."
+        )
+    elif "unexpected" in e or "syntaxerror" in e or "token" in e:
+        specific = (
+            "The code did not parse — likely an unbalanced bracket or an "
+            "unfinished statement. Return complete, valid JavaScript."
+        )
+    else:
+        specific = "Identify exactly what threw, then fix that specific cause."
+    return (
+        specific
+        + " Make the SMALLEST change that fixes the error: keep every part that "
+        "already works, do not rewrite the whole scene, and do not change the "
+        "teaching intent."
+    )
+
+
 def repair_with_claude(prompt: str, code: str, error: str) -> dict:
     user_text = (
         "The animation code you wrote threw an error in the sandbox. Fix it and "
-        "return the full corrected scene. Keep the same teaching intent.\n\n"
+        "return the full corrected scene.\n\n"
         f"Original request:\n{prompt}\n\n"
         f"Error:\n{error}\n\n"
+        f"How to fix it:\n{_repair_hint(error)}\n\n"
         f"Broken code (function body of scene(ctx, t, H)):\n{code}"
     )
     return claude_call_scene([{"type": "text", "text": user_text}])
@@ -760,6 +816,7 @@ def generate_with_ollama(prompt: str, preferred_mode: str, fix: dict | None = No
         user = (
             "Your animation code threw an error. Fix it and return the full scene "
             "as strict JSON.\n\nRequest:\n" + prompt + "\n\nError:\n" + fix["error"]
+            + "\n\nHow to fix it:\n" + _repair_hint(fix["error"])
             + "\n\nBroken code:\n" + fix["code"]
         )
     else:
@@ -919,6 +976,7 @@ def _scene_user_text(prompt: str, preferred_mode: str, fix: dict | None) -> str:
         user = (
             "Your animation code threw an error. Fix it and return the full scene "
             "as strict JSON.\n\nRequest:\n" + prompt + "\n\nError:\n" + fix["error"]
+            + "\n\nHow to fix it:\n" + _repair_hint(fix["error"])
             + "\n\nBroken code:\n" + fix["code"]
         )
     else:
@@ -1089,7 +1147,11 @@ _T_USAGE_RE = re.compile(r"\bt\b")
 
 # Helpers that put words/numbers on screen. Scenes with zero of these are
 # unlabeled pictures — no title, no values — which defeats the teaching goal.
-_LABEL_CALLS = ("H.text", "H.legend", "fillText")
+# `.axes(` covers both plot2d and cam3d axes, which render numeric tick labels /
+# axis names internally — without it, a correctly-labeled plot that relies on
+# axes() and skips a bare H.text title gets a false "unlabeled" flag and a
+# wasted regeneration.
+_LABEL_CALLS = ("H.text", "H.legend", "fillText", ".axes(")
 
 
 def code_is_animated(code: str) -> bool:
@@ -1218,20 +1280,26 @@ def _fallback_scene(prompt: str, reason: str) -> dict:
     }
 
 
-def _try_generate(fn, prompt: str, preferred_mode: str, label: str) -> dict:
+def _try_generate(
+    fn, prompt: str, preferred_mode: str, label: str, max_attempts: int = 3
+) -> dict:
     """Generate once, run the quality gate, and retry with targeted feedback.
 
     Three failure tiers, detected syntactically (we can't run JS here):
-      blank      — no drawing call at all. Never shippable; after three
+      blank      — no drawing call at all. Never shippable; after max_attempts
                    blank attempts we raise (caller may fall back).
       static     — never reads `t`, so the "animation" is a still image.
       unlabeled  — no text anywhere: no title, no values, no readouts.
     static/unlabeled trigger a regeneration with a hint naming exactly what
     was missing; if the last attempt still has them, we ship it anyway and
     annotate the scene so the UI can tell the user.
+
+    max_attempts is generator-aware: strong cloud models (Claude/OpenAI/Gemini)
+    almost never trip the gate, so 2 keeps a single corrective retry without
+    paying for a wasted third slow call; weak local models (Ollama) keep 3.
     """
     best_imperfect = None  # most recent paints-but-imperfect scene
-    for attempt in range(3):
+    for attempt in range(max_attempts):
         scene = normalize_scene(fn(prompt, preferred_mode), prompt)
         problems = scene_problems(scene.get("code", ""))
         if not problems:
@@ -1249,8 +1317,8 @@ def _try_generate(fn, prompt: str, preferred_mode: str, label: str) -> dict:
     if best_imperfect is not None:
         return best_imperfect
     raise RuntimeError(
-        f"{label} produced a blank scene three times — the code didn't call "
-        f"any drawing helper. Try a different prompt, or use Claude for "
+        f"{label} produced a blank scene {max_attempts} times — the code didn't "
+        f"call any drawing helper. Try a different prompt, or use Claude for "
         f"more reliable generation."
     )
 
@@ -1271,12 +1339,16 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     errors = []
     for label, fn in _cloud_generators():
         try:
-            return _try_generate(fn, prompt, preferred_mode, label)
+            return _try_generate(fn, prompt, preferred_mode, label, max_attempts=2)
         except Exception as error:  # noqa: BLE001
             errors.append(f"{label}: {error}")
     try:
         return _try_generate(
-            lambda p, m: generate_with_ollama(p, m), prompt, preferred_mode, "Ollama"
+            lambda p, m: generate_with_ollama(p, m),
+            prompt,
+            preferred_mode,
+            "Ollama",
+            max_attempts=3,
         )
     except Exception as error:  # noqa: BLE001
         errors.append(f"Ollama: {error}")
@@ -1315,11 +1387,15 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     raise RuntimeError(f"Generator failed ({detail}). {hint}")
 
 
-def repair_visualization(prompt: str, code: str, error: str) -> dict:
+def repair_visualization(prompt: str, code: str, error: str, where: str = "") -> dict:
     errors = []
+    # `where` is the offending source line the sandbox pulled from the stack
+    # trace (see sandbox-worker.js offendingLine). Folding it into the error text
+    # points every repair provider straight at the failing line.
+    error_ctx = error + (f"\n\nThe error was thrown at: {where}" if where else "")
     if claude_available()["available"]:
         try:
-            return normalize_scene(repair_with_claude(prompt, code, error), prompt)
+            return normalize_scene(repair_with_claude(prompt, code, error_ctx), prompt)
         except Exception as e:  # noqa: BLE001
             errors.append(f"Claude: {e}")
     for label, avail, fn in (
@@ -1330,13 +1406,13 @@ def repair_visualization(prompt: str, code: str, error: str) -> dict:
             continue
         try:
             return normalize_scene(
-                fn(prompt, "auto", fix={"code": code, "error": error}), prompt
+                fn(prompt, "auto", fix={"code": code, "error": error_ctx}), prompt
             )
         except Exception as e:  # noqa: BLE001
             errors.append(f"{label}: {e}")
     try:
         return normalize_scene(
-            generate_with_ollama(prompt, "auto", fix={"code": code, "error": error}),
+            generate_with_ollama(prompt, "auto", fix={"code": code, "error": error_ctx}),
             prompt,
         )
     except Exception as e:  # noqa: BLE001
@@ -1690,12 +1766,13 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
         prompt = payload.get("prompt", "")
         code = payload.get("code", "")
         error = payload.get("error", "")
+        where = payload.get("where", "")
         if not isinstance(prompt, str) or not isinstance(code, str) or not code.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "prompt and code are required."})
             return
         try:
             result = repair_visualization(
-                prompt.strip()[:4000], code[:20000], str(error)[:2000]
+                prompt.strip()[:4000], code[:20000], str(error)[:2000], str(where)[:300]
             )
         except RuntimeError as err:
             send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})

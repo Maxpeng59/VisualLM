@@ -68,6 +68,13 @@ const orbit = { yaw: 0, pitch: 0, zoom: 1 };
 let simTime = 0; // accumulated, speed-scaled seconds passed to scene()
 let lastWall = 0; // last wall-clock timestamp (ms)
 let frameCount = 0;
+// Per-frame error tolerance. A scene that has rendered at least one clean frame
+// (everRendered) is kept alive through an occasional throwing frame rather than
+// being killed and shipped to the slow repair loop. Only a first-frame failure
+// or a sustained run of throwing frames escalates to a real runtime-error.
+let consecutiveErrors = 0;
+let everRendered = false;
+let lastCode = ""; // raw source of the running scene, for offending-line lookup
 let loopTimer = null;
 
 const FRAME_MS = 1000 / 60;
@@ -297,7 +304,7 @@ function makeHelpers() {
       const yMax = o.yMax == null ? 6 : o.yMax;
       const X = (v) => box.x + map(v, xMin, xMax, 0, box.w);
       const Y = (v) => box.y + map(v, yMin, yMax, box.h, 0);
-      const view = {
+      let view = {
         box,
         xMin,
         xMax,
@@ -432,7 +439,11 @@ function makeHelpers() {
       };
       // Same tolerance as H itself: an invented view method becomes a no-op
       // instead of killing the whole frame with "v.foo is not a function".
-      return wrapHelpers(view);
+      // Reassign the `view` binding to the proxy so every `return view` inside
+      // the methods above yields the wrapped object — that keeps invented
+      // helpers no-op-able even mid-chain (e.g. view.fn(...).annotate(...)).
+      view = wrapHelpers(view);
+      return view;
     },
 
     /* 3D camera. project([x,y,z]) -> {x, y, depth, f}. Larger depth = farther
@@ -447,7 +458,7 @@ function makeHelpers() {
       const dist = o.dist || 9;
       const cx = o.cx == null ? logicalW / 2 : o.cx;
       const cy = o.cy == null ? logicalH / 2 : o.cy;
-      const cam = {
+      let cam = {
         set yaw(v) {
           yaw = v;
         },
@@ -599,7 +610,11 @@ function makeHelpers() {
         },
       };
       // Invented cam methods degrade to no-ops, like H and plot2d views.
-      return wrapHelpers(cam);
+      // Reassign the `cam` binding to the proxy so every `return cam` inside the
+      // methods above yields the wrapped object — chains keep working in any
+      // order (e.g. cam.grid().glow(), cam.line(...).spiral(...)).
+      cam = wrapHelpers(cam);
+      return cam;
     },
 
     /* Solid, lit, depth-sorted height surface: screenHeight = f(x, y).
@@ -851,15 +866,23 @@ function seedConvenienceGlobals() {
  * scene still renders and the model just doesn't get that specific helper. */
 function wrapHelpers(h) {
   if (typeof Proxy === "undefined") return h;
-  return new Proxy(h, {
+  const proxy = new Proxy(h, {
     get(target, key) {
-      if (key in target) return target[key];
-      // Common shape: `H.foo(...)` -> return a no-op function.
-      return function noop() {
-        return undefined;
+      // Real helpers and any symbol access (Symbol.toPrimitive, iterators, …)
+      // pass straight through — intercepting symbols would break coercion.
+      if (key in target || typeof key === "symbol") return target[key];
+      // An invented helper (`H.spinner()`, `cam.spiral()`, `view.heatmap()`).
+      // Return a no-op that RETURNS THE HOST so chains keep flowing:
+      // `cam.invented(...).line(...)` used to throw "Cannot read properties of
+      // undefined (reading 'line')" and burn the whole repair budget. Now the
+      // invented call does nothing and `.line(...)` resolves on the real host.
+      // A bare `H.invented(...)` still just no-ops.
+      return function chainableNoop() {
+        return proxy;
       };
     },
   });
+  return proxy;
 }
 
 /* ------------------------------------------------------------------ */
@@ -888,6 +911,37 @@ function compile(code) {
   return factory;
 }
 
+// A scene that throws every frame from t=0 is broken and must go to repair.
+// One that renders cleanly then throws on a single frame (a NaN at one value of
+// `t`, a transient out-of-range index) should NOT — killing it wastes a full
+// repair round-trip on a scene that's 99% working. We escalate only when the
+// scene never produced a clean frame, or has thrown continuously for ~half a
+// second (state is corrupted, not a one-frame blip).
+const MAX_CONSECUTIVE_ERRORS = 30; // ~0.5s at 60fps
+
+// Best-effort: pull the offending source line out of a V8 `new Function` stack
+// frame (`<anonymous>:LINE:COL`). The compiled wrapper adds 3 lines ahead of the
+// user's code (the `function(ctx,t)` header, the `) {` line, and the injected
+// `"use strict";`), so user line = anonLine - 3. Non-V8 engines format stacks
+// differently, miss the regex, and yield "" — the repair model then falls back
+// to the message + code alone. Handing the model the exact failing line cuts
+// repair rounds, especially for terse errors like "Cannot read properties of
+// undefined" that don't say *which* access broke.
+function offendingLine(stack, code) {
+  try {
+    if (!stack || !code) return "";
+    const m = /<anonymous>:(\d+):\d+/.exec(stack);
+    if (!m) return "";
+    const lineNo = parseInt(m[1], 10) - 3; // 1-based line within `code`
+    const lines = code.split("\n");
+    if (lineNo < 1 || lineNo > lines.length) return "";
+    const text = String(lines[lineNo - 1]).trim();
+    return text ? "line " + lineNo + ": " + text : "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function tick() {
   if (!running) return;
   const now = performance.now();
@@ -901,19 +955,28 @@ function tick() {
     try {
       ctx.clearRect(0, 0, logicalW, logicalH);
       sceneFn(ctx, simTime);  // H is a global (see compile())
+      everRendered = true;
+      consecutiveErrors = 0;
     } catch (err) {
-      running = false;
-      post({
-        type: "runtime-error",
-        message: String((err && err.message) || err),
-        stack: String((err && err.stack) || ""),
-      });
-      return;
+      consecutiveErrors++;
+      if (!everRendered || consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        running = false;
+        post({
+          type: "runtime-error",
+          message: String((err && err.message) || err),
+          stack: String((err && err.stack) || ""),
+          where: offendingLine(err && err.stack, lastCode),
+        });
+        return;
+      }
+      // Transient bad frame: skip drawing it, keep the loop alive.
     }
   }
 
   frameCount++;
-  if (frameCount % 20 === 0) {
+  // Heartbeat on the first clean frame (so the main thread's run() promise
+  // resolves ~immediately rather than after ~20 frames), then every 20 frames.
+  if (everRendered && (frameCount === 1 || frameCount % 20 === 0)) {
     post({ type: "heartbeat", frame: frameCount, t: simTime });
   }
 
@@ -960,6 +1023,7 @@ self.onmessage = (e) => {
       try {
         const fn = compile(m.code);
         sceneFn = fn;
+        lastCode = typeof m.code === "string" ? m.code : "";
         if (m.resetTime !== false) {
           simTime = 0;
           orbit.yaw = 0;
@@ -967,6 +1031,8 @@ self.onmessage = (e) => {
           orbit.zoom = 1;
         }
         frameCount = 0;
+        consecutiveErrors = 0;
+        everRendered = false;
         paused = false;
         lastWall = performance.now();
         if (!running) {

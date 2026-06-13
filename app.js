@@ -341,7 +341,7 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=13");
+      const worker = new Worker("./sandbox-worker.js?v=16");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
@@ -366,13 +366,20 @@
           if (this.pending && !this.pending.settled) this._settle(true);
           break;
         case "compile-error":
-        case "runtime-error":
+        case "runtime-error": {
+          // Carry the sandbox-extracted offending line (m.where) on the Error so
+          // the repair request can forward it to the model.
           if (this.pending && !this.pending.settled) {
-            this._settle(false, new Error(m.message || "Animation failed."));
+            const e = new Error(m.message || "Animation failed.");
+            e.where = m.where || "";
+            this._settle(false, e);
           } else if (this.onCrash) {
-            this.onCrash(new Error(m.message || "Animation crashed."));
+            const e = new Error(m.message || "Animation crashed.");
+            e.where = m.where || "";
+            this.onCrash(e);
           }
           break;
+        }
         default:
           break;
       }
@@ -489,6 +496,7 @@
         prompt: state.scene.prompt,
         code: state.scene.code,
         error: err.message,
+        where: err.where || "",
       });
       await runSceneWithRepair(repaired, state.scene.prompt);
     } catch (repairErr) {
@@ -557,7 +565,11 @@
   /* Visualization flow: generate -> run -> repair loop             */
   /* ============================================================== */
 
-  const MAX_REPAIRS = 3;
+  // Each repair is a full, slow LLM round-trip. With the sandbox now tolerant of
+  // invented helpers and transient bad frames (see sandbox-worker.js), genuinely
+  // unfixable scenes are rarer — so cap repairs at 2 and show the fallback
+  // sooner instead of burning a third slow call that usually fails the same way.
+  const MAX_REPAIRS = 2;
 
   // Guaranteed-renderable placeholder for when generation + all repairs fail.
   // Without it the canvas sits dead-black under the error message.
@@ -618,8 +630,25 @@
     }
   }
 
+  // Show the guaranteed-renderable placeholder under a warning. Used whenever
+  // the repair loop gives up — budget exhausted, or non-convergence detected
+  // (repeated identical error, or the model returned the code unchanged).
+  async function showClientFallback(scene, message) {
+    if (scene) {
+      state.scene = scene;
+      updatePanels(scene);
+    }
+    setConfidence(message, "warn");
+    try {
+      await runner.run(CLIENT_FALLBACK_CODE);
+    } catch (fallbackErr) {
+      /* placeholder is hand-written and can't realistically fail */
+    }
+  }
+
   async function runSceneWithRepair(scene, prompt) {
     let current = scene;
+    let prevError = null;
     for (let attempt = 0; attempt <= MAX_REPAIRS; attempt++) {
       const engineLabel = engineName(current.engine);
       try {
@@ -672,34 +701,46 @@
         seedTutorForScene(current);
         return;
       } catch (err) {
-        if (attempt >= MAX_REPAIRS) {
-          state.scene = current;
-          updatePanels(current);
-          setConfidence(
-            `Couldn't fix it after ${MAX_REPAIRS} tries. Last error: ${err.message}. ` +
-              "Try a different prompt, or set ANTHROPIC_API_KEY for the stronger Claude generator.",
-            "warn"
+        // Non-convergence guard: if this error follows a repair and matches the
+        // PREVIOUS attempt's error, the repairs aren't making progress — bail
+        // now instead of grinding through the rest of the (slow) repair budget.
+        const stuck = attempt > 0 && err.message === prevError;
+        prevError = err.message;
+        if (attempt >= MAX_REPAIRS || stuck) {
+          await showClientFallback(
+            current,
+            (stuck
+              ? `The fix kept hitting the same error ("${err.message}") — stopping early. `
+              : `Couldn't fix it after ${MAX_REPAIRS} tries. Last error: ${err.message}. `) +
+              "Try a different prompt, or set ANTHROPIC_API_KEY for the stronger Claude generator."
           );
-          // Don't leave a dead-black canvas under the error message.
-          try {
-            await runner.run(CLIENT_FALLBACK_CODE);
-          } catch (fallbackErr) {
-            /* placeholder is hand-written and can't realistically fail */
-          }
           return;
         }
         setConfidence(
           `Animation error: "${err.message}". Asking ${engineLabel} for a fix…`,
           "pending"
         );
+        const triedCode = current.code;
         try {
           current = await postJSON("/api/repair", {
             prompt,
             code: current.code,
             error: err.message,
+            where: err.where || "",
           });
         } catch (repairErr) {
           setConfidence("Repair failed: " + repairErr.message, "warn");
+          return;
+        }
+        // Unchanged-code guard: the model returned the same code it was given,
+        // so re-running it would fail identically — stop rather than spend
+        // another slow round on a guaranteed repeat.
+        if (current.code && triedCode && current.code.trim() === triedCode.trim()) {
+          await showClientFallback(
+            current,
+            "The model returned the same code unchanged — stopping early. " +
+              "Try rephrasing the prompt."
+          );
           return;
         }
       }

@@ -133,6 +133,57 @@ class QualityGateTests(unittest.TestCase):
             main._try_generate(always_blank, "orig", "auto", "Test")
 
 
+class RepairHintTests(unittest.TestCase):
+    def test_error_classes_get_specific_hints(self):
+        self.assertIn("declared", main._repair_hint("ReferenceError: radius is not defined"))
+        self.assertIn("real helper", main._repair_hint("TypeError: H.glow is not a function"))
+        self.assertIn(
+            "undefined/null",
+            main._repair_hint("TypeError: Cannot read properties of undefined (reading 'x')"),
+        )
+        self.assertIn("parse", main._repair_hint("SyntaxError: Unexpected token '}'"))
+
+    def test_every_hint_demands_a_minimal_change(self):
+        for err in ["x is not defined", "boom", "", "Cannot read properties of null"]:
+            self.assertIn("SMALLEST change", main._repair_hint(err))
+
+    def test_handles_non_string_error(self):
+        self.assertIn("SMALLEST change", main._repair_hint(None))
+
+
+class RepairVisualizationTests(unittest.TestCase):
+    """repair_visualization folds the sandbox's offending line into the error
+    text handed to the provider, and leaves it clean when there's no location."""
+
+    def _capture_repair_error(self, error, where):
+        captured = {}
+
+        def fake_repair(prompt, code, err):
+            captured["error"] = err
+            return {"code": "H.background(); H.text('x', 1, 2);", "engine": "claude"}
+
+        orig_avail, orig_repair = main.claude_available, main.repair_with_claude
+        main.claude_available = lambda: {"available": True}
+        main.repair_with_claude = fake_repair
+        try:
+            main.repair_visualization("draw it", "H.circle(p.x,1,2);", error, where=where)
+        finally:
+            main.claude_available = orig_avail
+            main.repair_with_claude = orig_repair
+        return captured["error"]
+
+    def test_offending_line_is_folded_in(self):
+        err = self._capture_repair_error(
+            "Cannot read properties of undefined", "line 5: H.circle(p.x, 1, 2)"
+        )
+        self.assertIn("Cannot read properties of undefined", err)
+        self.assertIn("line 5: H.circle(p.x, 1, 2)", err)
+
+    def test_no_where_leaves_error_clean(self):
+        err = self._capture_repair_error("boom", "")
+        self.assertEqual(err, "boom")
+
+
 class NormalizeSceneTests(unittest.TestCase):
     def test_dimension_normalization(self):
         scene = main.normalize_scene({"dimension": "3d surface"}, "p")
