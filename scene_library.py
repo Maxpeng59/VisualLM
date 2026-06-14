@@ -220,6 +220,121 @@ H.text("loss = " + loss(px, py).toFixed(3), 24, 52, { color: H.colors.sub, size:
 """.strip(),
     },
     {
+        "id": "electric-dipole-field",
+        "title": "Electric field lines of a dipole",
+        "tag": "Electromagnetism",
+        "dimension": "2D",
+        "equation": "E = k q / r^2  (superposed from + and - charges)",
+        "summary": "Field lines stream from the positive charge to the negative charge; a test charge follows the local field.",
+        "keywords": [
+            "electric field", "field lines", "dipole", "charge", "electrostatics",
+            "coulomb", "electromagnetism", "point charge", "positive", "negative",
+            "voltage", "potential",
+        ],
+        "bullets": [
+            "Field lines leave the + charge and enter the - charge.",
+            "Line density is higher where the field is stronger (near the charges).",
+            "A positive test charge feels a force along the local field direction.",
+        ],
+        "student_prompts": [
+            "Why do field lines never cross?",
+            "How does field strength fall off with distance?",
+            "What is the field exactly between the two charges?",
+        ],
+        "code": r"""
+H.background();
+const w = H.W, h = H.H;
+const q1 = { x: w * 0.38, y: h * 0.52, s: +1 };
+const q2 = { x: w * 0.62, y: h * 0.52, s: -1 };
+function field(x, y) {
+  let ex = 0, ey = 0;
+  for (const q of [q1, q2]) {
+    const dx = x - q.x, dy = y - q.y;
+    const r2 = dx * dx + dy * dy + 80;
+    const r = Math.sqrt(r2);
+    const e = q.s / r2;
+    ex += e * dx / r; ey += e * dy / r;
+  }
+  return [ex, ey];
+}
+// Streamlines seeded in a ring around the + charge.
+for (let k = 0; k < 16; k++) {
+  const a0 = (k / 16) * H.TAU;
+  let x = q1.x + 16 * Math.cos(a0), y = q1.y + 16 * Math.sin(a0);
+  const pts = [[x, y]];
+  for (let i = 0; i < 220; i++) {
+    const [ex, ey] = field(x, y);
+    const m = Math.hypot(ex, ey) + 1e-9;
+    x += 3 * ex / m; y += 3 * ey / m;
+    if (x < 0 || x > w || y < 0 || y > h) break;
+    if (Math.hypot(x - q2.x, y - q2.y) < 14) break;
+    pts.push([x, y]);
+  }
+  H.path(pts, { color: H.colors.accent, width: 1.4 });
+}
+// A test charge advected by the field.
+const tt = (t % 6) / 6;
+let tx = H.lerp(q1.x, q2.x, 0.15) , ty = q1.y - 70;
+for (let i = 0; i < Math.floor(tt * 200); i++) {
+  const [ex, ey] = field(tx, ty); const m = Math.hypot(ex, ey) + 1e-9;
+  tx += 2.4 * ex / m; ty += 2.4 * ey / m;
+}
+H.circle(tx, ty, 6, { fill: H.colors.yellow, stroke: H.colors.bg, width: 2 });
+H.circle(q1.x, q1.y, 13, { fill: H.colors.warn });
+H.circle(q2.x, q2.y, 13, { fill: H.colors.accent2 });
+H.text("+", q1.x - 5, q1.y + 5, { color: H.colors.bg, size: 16, weight: 700 });
+H.text("-", q2.x - 4, q2.y + 5, { color: H.colors.bg, size: 18, weight: 700 });
+H.text("Electric field of a dipole", 24, 30, { color: H.colors.ink, size: 18, weight: 700 });
+H.text("test charge along the field, t = " + (t % 6).toFixed(1) + "s", 24, 52, { color: H.colors.sub, size: 13 });
+""".strip(),
+    },
+    {
+        "id": "rc-circuit-charging",
+        "title": "RC circuit charging a capacitor",
+        "tag": "Electromagnetism",
+        "dimension": "2D",
+        "equation": "V(t) = V0 (1 - e^(-t / RC))",
+        "summary": "A capacitor charges toward the supply voltage on an exponential curve set by the time constant RC.",
+        "keywords": [
+            "rc circuit", "capacitor", "charging", "time constant", "exponential",
+            "circuit", "resistor", "voltage", "electronics", "discharge", "rc",
+        ],
+        "bullets": [
+            "The capacitor voltage rises fast at first, then levels off.",
+            "After one time constant (t = RC) it reaches about 63% of the supply.",
+            "Larger R or C means a slower charge (a bigger time constant).",
+        ],
+        "student_prompts": [
+            "What is the time constant here?",
+            "How long until the capacitor is ~99% charged?",
+            "What happens when it discharges?",
+        ],
+        "code": r"""
+H.background();
+const RC = 1.6, V0 = 5;
+const cycle = t % 8;
+const charging = cycle < 5;
+const tau = charging ? cycle : cycle - 5;
+const V = charging ? V0 * (1 - Math.exp(-tau / RC)) : V0 * Math.exp(-tau / RC);
+const v = H.plot2d({ xMin: 0, xMax: 5, yMin: 0, yMax: 5.5, box: { x: 70, y: 70, w: H.W * 0.5, h: H.H - 150 } });
+v.grid(); v.axes();
+v.fn((x) => V0 * (1 - Math.exp(-x / RC)), { color: H.colors.sub, width: 1.5 });
+v.line(RC, 0, RC, V0, { color: H.colors.violet, width: 1.5, dash: [5, 5] });
+v.dot(tau, V, { r: 7, fill: H.colors.good });
+v.text("t = RC", RC + 0.1, 0.5, { color: H.colors.violet, size: 12 });
+// A little circuit + a capacitor whose fill tracks V.
+const bx = H.W * 0.68, by = 120, bw = 220, bh = 260;
+H.rect(bx, by, bw, bh, { stroke: H.colors.axis, width: 2, radius: 8 });
+H.text("battery", bx + 10, by + 24, { color: H.colors.sub, size: 12 });
+const capX = bx + bw - 60, capY = by + 60, capH = 140;
+H.rect(capX, capY, 36, capH, { stroke: H.colors.accent, width: 2 });
+H.rect(capX + 3, capY + capH - capH * (V / V0) + 3, 30, capH * (V / V0) - 6, { fill: H.colors.accent });
+H.text("Q", capX + 44, capY + capH / 2, { color: H.colors.accent, size: 14 });
+H.text("RC circuit: charging a capacitor", 24, 30, { color: H.colors.ink, size: 18, weight: 700 });
+H.text((charging ? "charging" : "discharging") + "   V = " + V.toFixed(2) + " V", 24, 52, { color: H.colors.sub, size: 14 });
+""".strip(),
+    },
+    {
         "id": "dna-double-helix",
         "title": "DNA double helix",
         "tag": "Biology",
@@ -267,8 +382,21 @@ H.text("two antiparallel strands joined by base pairs", 24, 52, { color: H.color
 ]
 
 # Scenes authored + adversarially verified by the stem-scene-library workflow
-# are appended here. Kept separate from _BASE so the hand-verified baseline is
-# always present even if the generated batch is regenerated.
+# (one agent per STEM domain → independent correctness review per scene), then
+# re-validated through validate_scene.js so every one is guaranteed to run,
+# paint on-screen, animate, and carry labels. Stored as data in
+# scene_library_generated.json and merged here. Kept separate from _BASE so the
+# hand-verified baseline is always present even if the batch is regenerated.
+import json as _json
+from pathlib import Path as _Path
+
 _GENERATED: list[dict] = []
+_gen_path = _Path(__file__).resolve().parent / "scene_library_generated.json"
+try:
+    _GENERATED = _json.loads(_gen_path.read_text(encoding="utf-8"))
+    if not isinstance(_GENERATED, list):
+        _GENERATED = []
+except (OSError, ValueError):
+    _GENERATED = []
 
 SCENE_LIBRARY: list[dict] = _BASE + _GENERATED

@@ -540,9 +540,11 @@ class SceneCacheTests(unittest.TestCase):
 
 class LibraryMatchTests(unittest.TestCase):
     def test_strong_match(self):
+        # The library may hold more than one Fourier scene (hand-written +
+        # workflow-generated); any of them is a correct match for this prompt.
         sc, score = main.library_match("show a fourier series building a square wave", "auto")
         self.assertIsNotNone(sc)
-        self.assertEqual(sc["id"], "fourier-square-wave")
+        self.assertIn("fourier", sc["id"])
         self.assertGreaterEqual(score, 3.0)
 
     def test_no_match_for_unrelated(self):

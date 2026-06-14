@@ -1616,32 +1616,51 @@ def _tokenize(s: str) -> set:
     return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
 
 
+# Common words that shouldn't drive a topic match on their own.
+_MATCH_STOPWORDS = frozenset(
+    "the a an of in on to and or is are show me how visualize animate explain "
+    "draw plot with for as its it this that what why over time using see".split()
+)
+
+
+def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str) -> float:
+    score = 0.0
+    for kw in sc.get("keywords", []):
+        k = kw.lower().strip()
+        if not k:
+            continue
+        if " " in k:  # multi-word phrase: a contiguous hit is a strong signal
+            if k in ptext:
+                score += 2.0
+        elif k in ptoks:
+            score += 1.0
+    # Title and tag words are strong topic signals (minus generic stopwords).
+    title_toks = _tokenize(sc.get("title", "")) - _MATCH_STOPWORDS
+    tag_toks = _tokenize(sc.get("tag", "")) - _MATCH_STOPWORDS
+    score += 1.0 * len(title_toks & ptoks)
+    score += 0.5 * len(tag_toks & ptoks)
+    # Respect an explicit 2D/3D preference.
+    if mode in ("2d", "3d") and sc.get("dimension", "").lower() != mode:
+        score -= 1.5
+    return score
+
+
+def _library_scored(prompt: str, mode: str) -> list[tuple[dict, float]]:
+    """All library scenes scored against the prompt, best first (score > 0)."""
+    if not SCENE_LIBRARY:
+        return []
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
+    scored = [(sc, _scene_score(sc, ptext, ptoks, mode)) for sc in SCENE_LIBRARY]
+    scored = [t for t in scored if t[1] > 0]
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored
+
+
 def library_match(prompt: str, mode: str) -> tuple[dict | None, float]:
     """Best curated scene for this prompt + its match score (0 = no match)."""
-    if not SCENE_LIBRARY:
-        return None, 0.0
-    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
-    ptoks = _tokenize(prompt)
-    best, best_score = None, 0.0
-    for sc in SCENE_LIBRARY:
-        score = 0.0
-        for kw in sc.get("keywords", []):
-            k = kw.lower().strip()
-            if not k:
-                continue
-            if " " in k:  # multi-word phrase: weight a contiguous hit higher
-                if k in ptext:
-                    score += 2.0
-            elif k in ptoks:
-                score += 1.0
-        # Shared title words are a mild positive signal.
-        score += 0.5 * len(_tokenize(sc.get("title", "")) & ptoks)
-        # Respect an explicit 2D/3D preference.
-        if mode in ("2d", "3d") and sc.get("dimension", "").lower() != mode:
-            score -= 1.5
-        if score > best_score:
-            best, best_score = sc, score
-    return best, best_score
+    scored = _library_scored(prompt, mode)
+    return scored[0] if scored else (None, 0.0)
 
 
 def _library_scene(sc: dict, prompt: str) -> dict:
@@ -1674,10 +1693,20 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
 
     # 2. Strong curated match — instant, known-correct. The bar is high when a
     #    cloud model is available (the user likely wants a custom take), and
-    #    lower when we'd otherwise lean on the slow/weak local model.
-    lib_scene, lib_score = library_match(prompt, preferred_mode)
-    strong_threshold = 6.0 if _has_cloud() else 3.0
-    if lib_scene is not None and lib_score >= strong_threshold:
+    #    lower when we'd otherwise lean on the slow/weak local model. A
+    #    "dominance" gap guards against ambiguous matches: the top scene must
+    #    clearly beat the runner-up before we short-circuit to it.
+    scored = _library_scored(prompt, preferred_mode)
+    lib_scene, lib_score = scored[0] if scored else (None, 0.0)
+    runner_up = scored[1][1] if len(scored) > 1 else 0.0
+    strong_threshold = 6.0 if _has_cloud() else 2.5
+    # A clearly on-topic match (high absolute score) fast-paths regardless of
+    # ties — a 9-point Fourier match is right even if a second Fourier scene
+    # also scores high. The dominance gap only guards BORDERLINE matches from
+    # firing on an ambiguous near-tie between unrelated scenes. Base scenes are
+    # ordered first, so they win ties.
+    confident = lib_score >= 5.0 or (lib_score - runner_up) >= 1.5
+    if lib_scene is not None and lib_score >= strong_threshold and confident:
         result = _library_scene(lib_scene, prompt)
         scene_cache_put(prompt, preferred_mode, result)
         return result
@@ -1704,9 +1733,10 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     except Exception as error:  # noqa: BLE001
         errors.append(f"Ollama: {error}")
 
-    # 4. Every generator failed. A curated scene — even a loose match — beats a
-    #    dead canvas, so prefer it over the placeholder fallback.
-    if lib_scene is not None and lib_score > 0:
+    # 4. Every generator failed. A RELEVANT curated scene beats a dead canvas —
+    #    but a wrong-topic one is worse than an honest placeholder, so require a
+    #    moderate match (not just any score > 0).
+    if lib_scene is not None and lib_score >= 2.0:
         result = _library_scene(lib_scene, prompt)
         result["fallback_reason"] = (
             "The live generator couldn't produce a runnable scene, so here's the "

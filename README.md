@@ -50,6 +50,44 @@ molecules, fields in space) versus 2D (single-variable functions, circuits,
 graphs, planar geometry), and worked examples show exactly how to use the
 pipeline.
 
+## Getting the *right* animation — fast and reliably
+
+Generating animation code from a prompt is error-prone, especially with a small
+local model. Four layers make it fast and correct without training a model from
+scratch (which would be worse and need heavy infrastructure):
+
+1. **Curated STEM scene library** (`scene_library.py` +
+   `scene_library_generated.json`) — ~50 hand- and AI-authored scenes across
+   two dozen STEM domains, every one re-validated to actually run, paint
+   on-screen, animate, and carry labels. A strong keyword match short-circuits
+   straight to the matching scene: a "Fourier series" prompt renders in ~5 ms
+   instead of a 10–60 s generation that might fail. This is the practical,
+   retrieval-augmented realization of "feed it STEM data."
+2. **Headless validator** (`validate_scene.js`, run server-side via Node) —
+   runs each generated scene in a hardened sandbox (`vm`, fresh empty context,
+   2 s timeout) and reports throws / blank / off-screen / no-motion / no-labels
+   in ~50 ms. The browser is no longer the validator, so a bad scene is caught
+   and repaired *server-side* before it's ever sent — instead of costing a full
+   client round-trip per repair. It even catches the subtle "draws everything
+   off-screen" coordinate-space mixup. Degrades gracefully if Node is absent.
+3. **Deterministic auto-fixer** — mechanically prefixes bare `Math.*` calls
+   (`sin(x)` → `Math.sin(x)`, the #1 cause of "X is not defined"), fixing the
+   most common failure with zero model round-trips.
+4. **Validated-scene cache** — a repeated prompt (or a shared link) returns the
+   already-verified scene instantly.
+
+The result: common topics are instant and always correct; novel prompts are
+generated, validated, and repaired server-side, then handed to the browser
+ready to run. `GET /api/health` reports whether the validator and library are
+active (`validator`, `library_size`).
+
+### Regenerating the library
+
+The generated scenes were produced by a multi-agent workflow (one author per
+STEM domain, an independent adversarial review per scene). To re-run or extend
+it, regenerate `scene_library_generated.json`; every scene is re-checked by
+`validate_scene.js` (the test suite asserts the whole library runs).
+
 ## Brains (multi-provider)
 
 Generation tries providers in this order — the first one with a key wins:
@@ -116,15 +154,21 @@ HTTP round-trips against every endpoint (with stubbed generators).
 ## Files
 
 - `main.py` — web server, the four AI bridges (Claude/OpenAI/Gemini/Ollama),
-  scene generation/repair/tutor endpoints, rate limiting, and the system
-  prompt that defines the rendering contract.
+  the validate→auto-fix→repair pipeline, library retrieval + cache, rate
+  limiting, and the system prompt that defines the rendering contract.
 - `sandbox-worker.js` — the sandboxed Web Worker that runs generated code on
   an OffscreenCanvas, the `H` helper library, and the software 3D pipeline.
+- `validate_scene.js` — headless server-side scene validator (hardened Node
+  `vm` sandbox); mirrors the worker's `H` API surface.
+- `scene_library.py` / `scene_library_generated.json` — curated, verified STEM
+  scene corpus + the keyword retrieval used for the instant fast path.
 - `app.js` — orchestration: sandbox runner, generate→run→repair loop, orbit
   controls, playback, tutor chat, resources, status.
 - `index.html` / `styles.css` — app structure and visual design.
-- `Dockerfile` / `render.yaml` — production deployment.
-- `tests/` — stdlib-only test suite.
+- `Dockerfile` / `render.yaml` — production deployment (Docker image bundles
+  Node for the validator).
+- `tests/` — stdlib-only test suite (covers the validator, auto-fixer,
+  library, cache, and every endpoint).
 
 ## API
 
