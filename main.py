@@ -5,6 +5,8 @@ import hmac
 import json
 import os
 import re
+import shutil
+import subprocess
 import textwrap
 import threading
 import time
@@ -1023,6 +1025,143 @@ def generate_with_gemini(prompt: str, preferred_mode: str, fix: dict | None = No
     return plan
 
 
+# ===================================================================== #
+# Deterministic auto-fixer (no model round-trip)                        #
+# ===================================================================== #
+#
+# The cheapest repair is the one that never calls the model. Local models
+# (and occasionally the cloud ones) make a handful of MECHANICAL mistakes that
+# we can fix with certainty in microseconds — the biggest being bare math
+# calls (`sin(x)` instead of `Math.sin(x)`), the single most common reason a
+# 7B scene throws "sin is not defined". Fixing these here means they never
+# burn a slow repair attempt.
+
+# Every Math.* function a scene might call bare. Longest names first so the
+# alternation never matches a prefix (e.g. `sin` inside `sinh`).
+_MATH_FNS = sorted(
+    [
+        "atan2", "asinh", "acosh", "atanh", "expm1", "log10", "log1p", "log2",
+        "cbrt", "sinh", "cosh", "tanh", "asin", "acos", "atan", "sign",
+        "trunc", "sqrt", "hypot", "floor", "ceil", "round", "abs", "exp",
+        "log", "pow", "min", "max", "sin", "cos", "tan", "random",
+    ],
+    key=len,
+    reverse=True,
+)
+# A bare math call: the name not preceded by `.`/word-char/`$` (so `Math.sin`
+# and `mySin` are skipped) and followed by `(`.
+_MATH_FN_RE = re.compile(r"(?<![\w.$])(" + "|".join(_MATH_FNS) + r")(\s*\()")
+_BARE_PI_RE = re.compile(r"(?<![\w.$])PI\b")
+_BARE_TAU_RE = re.compile(r"(?<![\w.$])TAU\b")
+
+# String literals and comments — code transforms must skip these so a label
+# like H.text("compute sin(x)") or a comment isn't rewritten.
+_JS_LITERAL_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"'      # double-quoted string
+    r"|'(?:[^'\\]|\\.)*'"      # single-quoted string
+    r"|`(?:[^`\\]|\\.)*`"      # template literal
+    r"|//[^\n]*"               # line comment
+    r"|/\*.*?\*/",             # block comment
+    re.DOTALL,
+)
+
+
+def _apply_outside_strings(code: str, transform) -> str:
+    """Run `transform` only on the code OUTSIDE string literals and comments."""
+    out = []
+    last = 0
+    for m in _JS_LITERAL_RE.finditer(code):
+        out.append(transform(code[last : m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(transform(code[last:]))
+    return "".join(out)
+
+
+def _autofix_math(segment: str) -> str:
+    segment = _MATH_FN_RE.sub(r"Math.\1\2", segment)
+    segment = _BARE_PI_RE.sub("Math.PI", segment)
+    segment = _BARE_TAU_RE.sub("H.TAU", segment)
+    return segment
+
+
+def autofix_code(code: str) -> str:
+    """Mechanically fix high-confidence errors without a model round-trip.
+
+    Currently: prefix bare Math functions/constants (the dominant
+    "X is not defined" cause). Applied outside strings/comments so labels and
+    comments are never corrupted. Idempotent — running it on already-correct
+    code is a no-op.
+    """
+    if not code:
+        return code
+    try:
+        return _apply_outside_strings(code, _autofix_math)
+    except re.error:
+        return code
+
+
+# ===================================================================== #
+# Headless scene validator (Node, optional)                             #
+# ===================================================================== #
+#
+# If `node` is on PATH, we run every generated/repaired scene through
+# validate_scene.js BEFORE sending it to the browser. That sandboxed run
+# (fresh empty V8 context, hard timeout) tells us — in ~50 ms, server-side —
+# whether the scene throws, hangs, draws nothing, or lacks labels. This is the
+# big latency + reliability win: the browser used to BE the validator, so each
+# bad scene cost a full client round-trip + repair. Now we validate and repair
+# server-side and hand the browser a scene that already runs.
+#
+# Degrades gracefully: with no `node`, headless_validate returns None and the
+# pipeline falls back to the static gate (scene_problems) + the browser's own
+# repair loop, exactly as before.
+
+_NODE_BIN = shutil.which("node")
+_VALIDATOR_PATH = BASE_DIR / "validate_scene.js"
+
+
+def node_validator_available() -> bool:
+    return bool(_NODE_BIN) and _VALIDATOR_PATH.exists()
+
+
+def headless_validate(code: str, timeout: float = 6.0) -> dict | None:
+    """Run `code` in the sandboxed Node validator. None = couldn't validate.
+
+    Returns {ok, error, painted, text, paint} on success. None when the
+    validator is unavailable or itself failed (so callers skip the gate rather
+    than wrongly reject a scene).
+    """
+    if not code or not code.strip() or not node_validator_available():
+        return None
+    try:
+        proc = subprocess.run(
+            [_NODE_BIN, str(_VALIDATOR_PATH)],
+            input=code.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # The validator has its own 2 s in-VM timeout; hitting THIS one means
+        # node itself wedged. Treat as a hang so the scene gets repaired.
+        return {
+            "ok": False,
+            "error": "The scene hung (possible infinite loop).",
+            "painted": False,
+            "text": False,
+        }
+    except Exception:  # noqa: BLE001 — any spawn failure → "couldn't validate"
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        out = json.loads(proc.stdout.decode("utf-8") or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return out if isinstance(out, dict) else None
+
+
 _RESERVED_BINDINGS = ("H", "ctx", "t")
 
 
@@ -1092,6 +1231,10 @@ def sanitize_code(code: object) -> str:
             c,
             flags=re.DOTALL,
         )
+
+        # Deterministically fix bare Math calls / constants. This resolves the
+        # most common "X is not defined" throw with ZERO model round-trips.
+        c = autofix_code(c)
     except re.error:
         pass
 
@@ -1206,6 +1349,50 @@ _PROBLEM_HINTS = {
 }
 
 
+def evaluate_scene(code: str) -> dict:
+    """Single source of truth for "is this scene good?".
+
+    Prefers the Node validator (authoritative for runtime throws + whether the
+    scene actually painted), and falls back to the static gate when node is
+    absent. Returns {fatal, error, problems}:
+      fatal=True  → the scene throws / hangs / draws nothing. Must be repaired.
+      problems=[] → ship it. ['static'|'unlabeled'] → regenerate with feedback.
+    """
+    val = headless_validate(code)
+    if val is None:
+        # No runtime validator — fall back to the purely-static gate.
+        probs = scene_problems(code)
+        if probs == ["blank"]:
+            return {
+                "fatal": True,
+                "error": "The scene didn't call any drawing helper, so the canvas stayed blank.",
+                "problems": [],
+            }
+        return {"fatal": False, "error": None, "problems": probs}
+    # Node validator available — authoritative for runtime behaviour.
+    if not val.get("ok"):
+        return {
+            "fatal": True,
+            "error": val.get("error") or "The scene threw an error at runtime.",
+            "problems": [],
+        }
+    if not val.get("painted"):
+        return {
+            "fatal": True,
+            "error": (
+                "The scene ran but drew nothing (blank canvas). Call H.background() "
+                "and then drawing helpers that actually paint."
+            ),
+            "problems": [],
+        }
+    problems = []
+    if not code_is_animated(code):
+        problems.append("static")
+    if not (val.get("text") or code_has_labels(code)):
+        problems.append("unlabeled")
+    return {"fatal": False, "error": None, "problems": problems}
+
+
 def normalize_scene(plan: dict, prompt: str) -> dict:
     def s(key, default=""):
         v = plan.get(key)
@@ -1287,46 +1474,73 @@ def _fallback_scene(prompt: str, reason: str) -> dict:
     }
 
 
+def _repair_feedback(error: str, code: str) -> str:
+    """A feedback block that turns the next generation into a targeted repair.
+
+    Folding the runtime error + the broken code into the prompt lets us drive a
+    server-side fix through the SAME generate function (keeping _try_generate
+    provider-agnostic) without a separate repair call path.
+    """
+    return (
+        "\n\nCRITICAL: your previous code FAILED to run in the sandbox.\n"
+        f"Error: {error}\n"
+        f"How to fix it: {_repair_hint(error)}\n"
+        "Return a corrected, complete scene. Broken code was:\n" + (code or "")
+    )
+
+
 def _try_generate(
     fn, prompt: str, preferred_mode: str, label: str, max_attempts: int = 3
 ) -> dict:
-    """Generate once, run the quality gate, and retry with targeted feedback.
+    """Generate, validate server-side, and retry with targeted feedback.
 
-    Three failure tiers, detected syntactically (we can't run JS here):
-      blank      — no drawing call at all. Never shippable; after max_attempts
-                   blank attempts we raise (caller may fall back).
-      static     — never reads `t`, so the "animation" is a still image.
-      unlabeled  — no text anywhere: no title, no values, no readouts.
-    static/unlabeled trigger a regeneration with a hint naming exactly what
-    was missing; if the last attempt still has them, we ship it anyway and
-    annotate the scene so the UI can tell the user.
+    Every candidate is run through evaluate_scene (the Node validator when
+    available, else the static gate), which classifies it as:
+      fatal      — throws / hangs / draws nothing. We regenerate with the exact
+                   runtime error + the broken code folded into the prompt, so
+                   the model performs a precise fix. After max_attempts we raise.
+      static     — never reads `t`, so it's a still image.
+      unlabeled  — no title / values / readouts.
+    static/unlabeled regenerate with a hint naming what was missing; if the
+    last attempt still trips them, we ship it anyway, annotated, so the user
+    gets a working (if imperfect) scene instead of an error.
 
-    max_attempts is generator-aware: strong cloud models (Claude/OpenAI/Gemini)
-    almost never trip the gate, so 2 keeps a single corrective retry without
-    paying for a wasted third slow call; weak local models (Ollama) keep 3.
+    The deterministic auto-fixer runs inside normalize_scene, so mechanically
+    fixable faults (bare Math.*) are resolved here with ZERO extra model calls.
+
+    max_attempts is generator-aware: strong cloud models almost never trip the
+    gate, so 2 keeps a single corrective retry; weak local models keep 3.
     """
     best_imperfect = None  # most recent paints-but-imperfect scene
+    scene = normalize_scene(fn(prompt, preferred_mode), prompt)
+    last_error = None
     for attempt in range(max_attempts):
-        scene = normalize_scene(fn(prompt, preferred_mode), prompt)
-        problems = scene_problems(scene.get("code", ""))
-        if not problems:
+        ev = evaluate_scene(scene.get("code", ""))
+        if not ev["fatal"] and not ev["problems"]:
             if attempt > 0:
-                # Annotate so the UI can surface what happened.
                 scene["recovered_after_retry"] = attempt
             return scene
-        if problems != ["blank"]:
-            scene["quality_warnings"] = problems
+        if not ev["fatal"]:
+            scene["quality_warnings"] = ev["problems"]
             best_imperfect = scene
-        # Reprompt with feedback naming exactly what was wrong. Models
-        # reliably do better on the second try with a targeted hint.
-        complaints = " ALSO, ".join(_PROBLEM_HINTS[p] for p in problems)
-        prompt = prompt + "\n\nCRITICAL FEEDBACK on your previous attempt: " + complaints
+        if attempt == max_attempts - 1:
+            break
+        # Regenerate with feedback. Fatal → repair the exact fault; quality →
+        # name what was missing. Always feed back off the ORIGINAL prompt so
+        # complaints don't pile up across attempts.
+        if ev["fatal"]:
+            last_error = ev["error"]
+            feedback = _repair_feedback(ev["error"], scene.get("code", ""))
+        else:
+            complaints = " ALSO, ".join(_PROBLEM_HINTS[p] for p in ev["problems"])
+            feedback = "\n\nCRITICAL FEEDBACK on your previous attempt: " + complaints
+        scene = normalize_scene(fn(prompt + feedback, preferred_mode), prompt)
     if best_imperfect is not None:
         return best_imperfect
     raise RuntimeError(
-        f"{label} produced a blank scene {max_attempts} times — the code didn't "
-        f"call any drawing helper. Try a different prompt, or use Claude for "
-        f"more reliable generation."
+        f"{label} couldn't produce a runnable scene after {max_attempts} attempts"
+        + (f" (last error: {last_error})" if last_error else "")
+        + ". Try a different prompt, or use a stronger model (ANTHROPIC_API_KEY)."
     )
 
 
@@ -1342,42 +1556,172 @@ def _cloud_generators() -> list[tuple[str, object]]:
     return chain
 
 
+# ===================================================================== #
+# Curated STEM scene library + validated-scene cache                    #
+# ===================================================================== #
+#
+# The fastest, most reliable scene is one we don't have to generate. Two
+# layers sit in front of the model:
+#   1. An exact-prompt cache of scenes that already passed validation, so a
+#      repeated prompt (or a shared link) renders instantly.
+#   2. A curated library of hand-verified scenes across STEM domains. A strong
+#      keyword match short-circuits to an instant, known-correct animation —
+#      this is the practical, retrieval-augmented version of "feed it STEM
+#      data": a vetted corpus the matcher draws on instead of training a model.
+
+try:
+    from scene_library import SCENE_LIBRARY  # type: ignore
+except Exception:  # noqa: BLE001 — library is optional; never block startup
+    SCENE_LIBRARY = []
+
+_scene_cache_lock = threading.Lock()
+_scene_cache: dict[tuple, dict] = {}
+_SCENE_CACHE_MAX = 256
+
+
+def _cache_key(prompt: str, mode: str) -> tuple:
+    return (mode, re.sub(r"\s+", " ", prompt.strip().lower()))
+
+
+def scene_cache_get(prompt: str, mode: str) -> dict | None:
+    with _scene_cache_lock:
+        hit = _scene_cache.get(_cache_key(prompt, mode))
+        return dict(hit) if hit else None
+
+
+def scene_cache_put(prompt: str, mode: str, scene: dict) -> None:
+    # Only cache CLEAN scenes: never a fallback or a known-imperfect one, so a
+    # later retry still gets a chance at something better.
+    if not scene or scene.get("is_fallback") or scene.get("quality_warnings"):
+        return
+    with _scene_cache_lock:
+        if len(_scene_cache) >= _SCENE_CACHE_MAX:
+            _scene_cache.pop(next(iter(_scene_cache)))
+        _scene_cache[_cache_key(prompt, mode)] = dict(scene)
+
+
+def _tokenize(s: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+
+def library_match(prompt: str, mode: str) -> tuple[dict | None, float]:
+    """Best curated scene for this prompt + its match score (0 = no match)."""
+    if not SCENE_LIBRARY:
+        return None, 0.0
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks = _tokenize(prompt)
+    best, best_score = None, 0.0
+    for sc in SCENE_LIBRARY:
+        score = 0.0
+        for kw in sc.get("keywords", []):
+            k = kw.lower().strip()
+            if not k:
+                continue
+            if " " in k:  # multi-word phrase: weight a contiguous hit higher
+                if k in ptext:
+                    score += 2.0
+            elif k in ptoks:
+                score += 1.0
+        # Shared title words are a mild positive signal.
+        score += 0.5 * len(_tokenize(sc.get("title", "")) & ptoks)
+        # Respect an explicit 2D/3D preference.
+        if mode in ("2d", "3d") and sc.get("dimension", "").lower() != mode:
+            score -= 1.5
+        if score > best_score:
+            best, best_score = sc, score
+    return best, best_score
+
+
+def _library_scene(sc: dict, prompt: str) -> dict:
+    return {
+        "title": sc.get("title", "STEM Visualization"),
+        "tag": sc.get("tag", "STEM"),
+        "dimension": "3D" if str(sc.get("dimension", "")).lower().startswith("3") else "2D",
+        "equation": sc.get("equation", ""),
+        "summary": sc.get("summary", ""),
+        "bullets": [str(b) for b in sc.get("bullets", [])][:4],
+        "student_prompts": [str(p) for p in sc.get("student_prompts", [])][:4],
+        "code": sanitize_code(sc.get("code", "")),
+        "model": "curated",
+        "engine": "library",
+        "prompt": prompt,
+        "from_library": True,
+    }
+
+
+def _has_cloud() -> bool:
+    return bool(_cloud_generators())
+
+
 def plan_visualization(prompt: str, preferred_mode: str) -> dict:
+    # 1. Exact-prompt cache — instant repeat for an already-validated scene.
+    cached = scene_cache_get(prompt, preferred_mode)
+    if cached:
+        cached["cached"] = True
+        return cached
+
+    # 2. Strong curated match — instant, known-correct. The bar is high when a
+    #    cloud model is available (the user likely wants a custom take), and
+    #    lower when we'd otherwise lean on the slow/weak local model.
+    lib_scene, lib_score = library_match(prompt, preferred_mode)
+    strong_threshold = 6.0 if _has_cloud() else 3.0
+    if lib_scene is not None and lib_score >= strong_threshold:
+        result = _library_scene(lib_scene, prompt)
+        scene_cache_put(prompt, preferred_mode, result)
+        return result
+
+    # 3. Generate with the provider chain (each validated + repaired server-side).
     errors = []
     for label, fn in _cloud_generators():
         try:
-            return _try_generate(fn, prompt, preferred_mode, label, max_attempts=2)
+            scene = _try_generate(fn, prompt, preferred_mode, label, max_attempts=2)
+            scene_cache_put(prompt, preferred_mode, scene)
+            return scene
         except Exception as error:  # noqa: BLE001
             errors.append(f"{label}: {error}")
     try:
-        return _try_generate(
+        scene = _try_generate(
             lambda p, m: generate_with_ollama(p, m),
             prompt,
             preferred_mode,
             "Ollama",
             max_attempts=3,
         )
+        scene_cache_put(prompt, preferred_mode, scene)
+        return scene
     except Exception as error:  # noqa: BLE001
         errors.append(f"Ollama: {error}")
+
+    # 4. Every generator failed. A curated scene — even a loose match — beats a
+    #    dead canvas, so prefer it over the placeholder fallback.
+    if lib_scene is not None and lib_score > 0:
+        result = _library_scene(lib_scene, prompt)
+        result["fallback_reason"] = (
+            "The live generator couldn't produce a runnable scene, so here's the "
+            "closest curated STEM animation."
+        )
+        return result
+
     detail = " | ".join(errors) if errors else "no backend available"
-    # Connection / timeout / no-backend failures are unrecoverable here — let
-    # the frontend show a real error. But "blank scene three times" failures
-    # are recoverable: we return a fallback scene that at least renders
-    # something visible plus a clear explanation.
-    blank_failure = any("blank scene" in e.lower() for e in errors)
-    fatal_failure = any(
-        ("timed out" in e.lower())
-        or ("timeout" in e.lower())
-        or ("connection" in e.lower())
-        or ("could not reach" in e.lower())
-        for e in errors
-    ) or not blank_failure
-    if blank_failure and not fatal_failure:
+    # A backend that was REACHABLE but produced unrunnable code is "soft" — show
+    # the animated placeholder + an explanation rather than a hard error.
+    # UNREACHABLE backends (connection/timeout/auth) are "hard" — surface them.
+    def _is_hard(e: str) -> bool:
+        e = e.lower()
+        return any(
+            k in e
+            for k in (
+                "timed out", "timeout", "connection", "could not reach",
+                "no content", "http ", "api key", "invalid json", "not configured",
+            )
+        )
+
+    if errors and not all(_is_hard(e) for e in errors):
         return _fallback_scene(
             prompt,
-            "The local model produced code that didn't draw anything three "
-            "times in a row. Rephrase the prompt or enable Claude for stronger "
-            "results.",
+            "The generator's code kept failing to run. Rephrase the prompt, or "
+            "enable a stronger model (ANTHROPIC_API_KEY / OPENAI_API_KEY / "
+            "GEMINI_API_KEY) for more reliable results.",
         )
     if any("timed out" in e.lower() or "timeout" in e.lower() for e in errors):
         hint = (
@@ -1625,6 +1969,9 @@ def get_health() -> dict:
         "gemini": gemini_info,
         "generator": generator,
         "access_code_required": bool(ACCESS_CODE),
+        # Reliability/speed layers, surfaced so the UI (and ops) can see them.
+        "validator": node_validator_available(),
+        "library_size": len(SCENE_LIBRARY),
     }
 
 
