@@ -8,6 +8,7 @@ import re
 import textwrap
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -138,11 +139,17 @@ def read_json_body(handler: SimpleHTTPRequestHandler) -> dict:
 
 def send_json(handler: SimpleHTTPRequestHandler, status: HTTPStatus, payload: dict) -> None:
     data = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(data)))
-    handler.end_headers()
-    handler.wfile.write(data)
+    try:
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+    except (BrokenPipeError, ConnectionError):
+        # Client disconnected mid-response (common when the user navigates away
+        # during a slow generation). There's no one to send to — swallow it
+        # rather than let it surface as an unhandled traceback in the log.
+        pass
 
 
 # ===================================================================== #
@@ -1724,14 +1731,26 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "Body must be a JSON object."})
             return
 
-        if parsed.path == "/api/visualize":
-            self._handle_visualize(payload)
-        elif parsed.path == "/api/repair":
-            self._handle_repair(payload)
-        elif parsed.path == "/api/resources":
-            self._handle_resource_upload(payload)
-        else:
-            self._handle_chat(payload)
+        # Last-resort guard. Handlers catch their own *expected* errors (bad
+        # input -> 400, generator failure -> 503). An UNEXPECTED exception (a
+        # bug, a new SDK error type) must not escape do_POST — that drops the
+        # client connection with a bare stderr traceback and no response. Log
+        # it and return a clean 500. Handlers do their heavy work before
+        # sending anything, so no response has started when we land here.
+        try:
+            if parsed.path == "/api/visualize":
+                self._handle_visualize(payload)
+            elif parsed.path == "/api/repair":
+                self._handle_repair(payload)
+            elif parsed.path == "/api/resources":
+                self._handle_resource_upload(payload)
+            else:
+                self._handle_chat(payload)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            send_json(
+                self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Internal server error."}
+            )
 
     def _handle_resource_upload(self, payload: dict) -> None:
         name = payload.get("name", "")

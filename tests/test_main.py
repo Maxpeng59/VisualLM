@@ -8,6 +8,8 @@ functions monkeypatched, so no AI backend is needed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import threading
@@ -353,6 +355,24 @@ class EndpointTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("binary", body["error"].lower())
+
+    def test_handler_exception_returns_500(self):
+        # An UNEXPECTED exception in a handler (not the RuntimeError that
+        # handlers already convert to 503) must come back as a clean 500, not a
+        # dropped connection. stderr is suppressed because the guard logs the
+        # traceback by design.
+        def boom(prompt, mode):
+            raise ValueError("unexpected handler bug")
+
+        original = main.plan_visualization
+        main.plan_visualization = boom
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                status, body = self.request("POST", "/api/visualize", {"prompt": "p"})
+        finally:
+            main.plan_visualization = original
+        self.assertEqual(status, 500)
+        self.assertIn("error", body)
 
 
 if __name__ == "__main__":
