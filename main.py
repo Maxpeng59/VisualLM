@@ -1385,6 +1385,18 @@ def evaluate_scene(code: str) -> dict:
             ),
             "problems": [],
         }
+    if val.get("onscreen") is False:
+        return {
+            "fatal": True,
+            "error": (
+                "Everything was drawn OFF-SCREEN — you mixed coordinate spaces. "
+                "H.line/H.circle/H.text take PIXEL coords (0..H.W, 0..H.H). The "
+                "plot2d view's methods (v.line/v.text/v.dot/v.path/v.circle) take "
+                "DATA coords and map them for you — do NOT wrap their arguments in "
+                "v.X()/v.Y(). Pick one space per call and keep points on-canvas."
+            ),
+            "problems": [],
+        }
     problems = []
     if not code_is_animated(code):
         problems.append("static")

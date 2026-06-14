@@ -437,6 +437,25 @@ class HeadlessValidatorTests(unittest.TestCase):
         )
         self.assertTrue(r["ok"])
 
+    def test_offscreen_draws_detected(self):
+        # The classic data-vs-pixel mixup: wrapping data-space v.line args in
+        # v.X()/v.Y() double-maps them off the canvas. Runs fine, paints, but
+        # nothing is visible.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-5,xMax:5,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " v.line(v.X(0), v.Y(0), v.X(3), v.Y(3), {}); v.text('t', 24, 30, {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["painted"])
+        self.assertFalse(r["onscreen"])
+
+    def test_onscreen_content_passes(self):
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-5,xMax:5,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " v.line(0, 0, 3, 3, {}); H.text('t', 24, 30, {});"
+        )
+        self.assertTrue(r["onscreen"])
+
     def test_host_escape_is_contained(self):
         # process must be unreachable inside the sandbox.
         r = main.headless_validate(
@@ -474,10 +493,16 @@ class EvaluateSceneTests(unittest.TestCase):
         self.assertEqual(set(ev["problems"]), {"static", "unlabeled"})
 
     def test_clean_scene(self):
-        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": True}
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": True, "onscreen": True}
         ev = main.evaluate_scene('H.background(); H.text("t="+t,1,2,{});')
         self.assertFalse(ev["fatal"])
         self.assertEqual(ev["problems"], [])
+
+    def test_fatal_on_offscreen(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": True, "onscreen": False}
+        ev = main.evaluate_scene("v.line(v.X(0),v.Y(0),v.X(3),v.Y(3),{});")
+        self.assertTrue(ev["fatal"])
+        self.assertIn("OFF-SCREEN", ev["error"])
 
     def test_falls_back_to_static_gate_without_node(self):
         main.headless_validate = lambda code, timeout=6.0: None

@@ -37,9 +37,17 @@ const vm = require("vm");
 // backticks in here — this whole thing is a template literal. `var`-declared
 // names (H/ctx/cam/view/v/paint/text) persist on the context global.
 const SANDBOX_SRC = `
-var paint = 0, text = 0;
+var paint = 0, text = 0, conscr = 0;
 var console = { log: function(){}, warn: function(){}, error: function(){}, info: function(){} };
 var W = 900, H_ = 560, TAU = Math.PI * 2;
+// On-screen test (generous margin). A draw whose points all land far outside
+// the canvas is invisible — the tell-tale of mixing data and pixel coords
+// (e.g. v.line(v.X(x), ...) double-transforms). 'paint' counts CONTENT draws
+// (not background/grid/axes scaffold); 'conscr' counts those that land
+// on-screen. paint>0 with conscr===0 means "everything was drawn off-screen".
+function inb(x, y){ return typeof x === "number" && typeof y === "number" && isFinite(x) && isFinite(y) && x >= -120 && x <= W + 120 && y >= -120 && y <= H_ + 120; }
+function onAny(pairs){ for (var i = 0; i < pairs.length; i++) if (inb(pairs[i][0], pairs[i][1])) return true; return false; }
+function content(on){ paint++; if (on) conscr++; }
 var COLORS = {
   bg:"#0e1525", panel:"#16203a", ink:"#eef2ff", sub:"#9fb0d4", grid:"#26314f",
   axis:"#566087", accent:"#7cc4ff", accent2:"#f4a259", good:"#67e8b0",
@@ -76,18 +84,17 @@ function makeCtx(){
   });
 }
 function makeH(){
-  function draw(){ paint++; }
   var H = {
     TAU: TAU, PI: Math.PI, colors: COLORS, palette: PALETTE,
     clamp: clamp, lerp: lerp, map: map, ease: ease, W: W, H: H_,
     clear: function(){}, background: function(){},
-    text: function(){ text++; paint++; },
-    line: function(){ draw(); },
-    path: function(p){ if(p && p.length>=2) draw(); },
-    circle: function(){ draw(); },
-    rect: function(){ draw(); },
-    arrow: function(){ draw(); },
-    legend: function(items){ (items||[]).forEach(function(){ text++; }); paint++; },
+    text: function(s,x,y){ text++; content(inb(x,y)); },
+    line: function(x1,y1,x2,y2){ content(onAny([[x1,y1],[x2,y2]])); },
+    path: function(p){ if(p && p.length>=2) content(onAny(p)); },
+    circle: function(x,y){ content(inb(x,y)); },
+    rect: function(x,y,w,h){ content(onAny([[x,y],[x+w,y+h]])); },
+    arrow: function(x1,y1,x2,y2){ content(onAny([[x1,y1],[x2,y2]])); },
+    legend: function(items){ (items||[]).forEach(function(){ text++; }); content(true); },
     color: function(i){ return PALETTE[((i%PALETTE.length)+PALETTE.length)%PALETTE.length]; },
     hsl: function(h,s,l,a){ return "hsla("+h+","+s+"%,"+l+"%,"+(a==null?1:a)+")"; },
     plot2d: function(o){
@@ -98,18 +105,22 @@ function makeH(){
       var box=o.box||{ x:pad, y:pad*0.6, w:W-pad*2, h:H_-pad*1.6 };
       var X=function(v){ return box.x+map(v,xMin,xMax,0,box.w); };
       var Y=function(v){ return box.y+map(v,yMin,yMax,box.h,0); };
+      // grid/axes are scaffold (don't count as content); fn maps internally so
+      // it's reliably on-screen. The data-space methods convert via X/Y then
+      // check bounds, so a scene that wraps args in v.X()/v.Y() (double map)
+      // shows up as off-screen content.
       var view={
         box:box, xMin:xMin, xMax:xMax, yMin:yMin, yMax:yMax, X:X, Y:Y,
-        grid:function(){ draw(); return view; },
-        axes:function(){ draw(); text++; return view; },
-        fn:function(f){ for(var i=0;i<=12;i++){ try{ f(lerp(xMin,xMax,i/12)); }catch(e){} } draw(); return view; },
-        dot:function(){ draw(); return view; },
-        line:function(){ draw(); return view; },
-        arrow:function(){ draw(); return view; },
-        text:function(){ text++; paint++; return view; },
-        circle:function(){ draw(); return view; },
-        path:function(p){ if(p && p.length) draw(); return view; },
-        rect:function(){ draw(); return view; }
+        grid:function(){ return view; },
+        axes:function(){ text++; return view; },
+        fn:function(f){ for(var i=0;i<=12;i++){ try{ f(lerp(xMin,xMax,i/12)); }catch(e){} } content(true); return view; },
+        dot:function(x,y){ content(inb(X(x),Y(y))); return view; },
+        line:function(x1,y1,x2,y2){ content(onAny([[X(x1),Y(y1)],[X(x2),Y(y2)]])); return view; },
+        arrow:function(x1,y1,x2,y2){ content(onAny([[X(x1),Y(y1)],[X(x2),Y(y2)]])); return view; },
+        text:function(s,x,y){ text++; content(inb(X(x),Y(y))); return view; },
+        circle:function(x,y){ content(inb(X(x),Y(y))); return view; },
+        path:function(p){ if(p && p.length){ var q=[]; for(var i=0;i<p.length;i++) q.push([X(p[i][0]),Y(p[i][1])]); content(onAny(q)); } return view; },
+        rect:function(x,y,w,h){ content(onAny([[X(x),Y(y)],[X(x+w),Y(y+h)]])); return view; }
       };
       return wrap(view);
     },
@@ -118,21 +129,22 @@ function makeH(){
       var yaw=o.yaw||0, pitch=o.pitch==null?-0.5:o.pitch;
       var scale=o.scale||60, dist=o.dist||9;
       var cx=o.cx==null?W/2:o.cx, cy=o.cy==null?H_/2:o.cy;
+      function proj(p){ var x=(p&&p[0])||0,y=(p&&p[1])||0,z=(p&&p[2])||0; var f=dist/(dist+z); return { x:cx+x*scale*f, y:cy-y*scale*f, depth:z, f:f }; }
       var cam={
         get yaw(){ return yaw; }, set yaw(v){ yaw=v; },
         get pitch(){ return pitch; }, set pitch(v){ pitch=v; },
-        project:function(p){ var x=(p&&p[0])||0,y=(p&&p[1])||0,z=(p&&p[2])||0; var f=dist/(dist+z); return { x:cx+x*scale*f, y:cy-y*scale*f, depth:z, f:f }; },
-        line:function(){ draw(); return cam; },
-        path:function(p){ if(p && p.length>=2) draw(); return cam; },
-        poly:function(p){ if(p && p.length>=3) draw(); return cam; },
-        sphere:function(p){ draw(); return cam.project(p); },
-        grid:function(){ draw(); return cam; },
-        axes:function(){ draw(); text++; return cam; }
+        project:proj,
+        line:function(a,b){ var p1=proj(a),p2=proj(b); content(onAny([[p1.x,p1.y],[p2.x,p2.y]])); return cam; },
+        path:function(p){ if(p && p.length>=2){ var q=[]; for(var i=0;i<p.length;i++){ var pr=proj(p[i]); q.push([pr.x,pr.y]); } content(onAny(q)); } return cam; },
+        poly:function(p){ if(p && p.length>=3){ var q=[]; for(var i=0;i<p.length;i++){ var pr=proj(p[i]); q.push([pr.x,pr.y]); } content(onAny(q)); } return cam; },
+        sphere:function(p){ var q=proj(p); content(inb(q.x,q.y)); return q; },
+        grid:function(){ return cam; },
+        axes:function(){ text++; return cam; }
       };
       return wrap(cam);
     },
-    surface3d: function(cam,f){ if(typeof f==="function"){ for(var i=0;i<6;i++) for(var j=0;j<6;j++){ try{ f(i-3,j-3); }catch(e){} } } draw(); },
-    mesh3d: function(cam,fn){ if(typeof fn==="function"){ for(var i=0;i<6;i++) for(var j=0;j<6;j++){ try{ fn((i/6)*TAU,(j/6)*TAU); }catch(e){} } } draw(); }
+    surface3d: function(cam,f){ if(typeof f==="function"){ for(var i=0;i<6;i++) for(var j=0;j<6;j++){ try{ f(i-3,j-3); }catch(e){} } } content(true); },
+    mesh3d: function(cam,fn){ if(typeof fn==="function"){ for(var i=0;i<6;i++) for(var j=0;j<6;j++){ try{ fn((i/6)*TAU,(j/6)*TAU); }catch(e){} } } content(true); }
   };
   return wrap(H);
 }
@@ -154,7 +166,7 @@ function readStdin() {
 
 (async () => {
   const code = await readStdin();
-  let result = { ok: false, error: null, painted: false, text: false, paint: 0 };
+  let result = { ok: false, error: null, painted: false, text: false, paint: 0, onscreen: true };
 
   // The runner: define the scene as the body of a function (so a scene's own
   // `const v = ...` shadows the global v instead of colliding with a
@@ -168,7 +180,7 @@ function readStdin() {
     code +
     "\n};var __ts=[0,0.4,1.3,3.0];for(var __i=0;__i<__ts.length;__i++){__s(ctx,__ts[__i]);}__ok=true;}" +
     "catch(e){__ok=false;__err=(e&&e.message)?String(e.message):String(e);}" +
-    "return JSON.stringify({ok:__ok,error:__err,paint:paint,text:text});})()";
+    "return JSON.stringify({ok:__ok,error:__err,paint:paint,text:text,conscr:conscr});})()";
 
   try {
     const context = vm.createContext(Object.create(null));
@@ -179,6 +191,9 @@ function readStdin() {
     result.paint = parsed.paint || 0;
     result.painted = (parsed.paint || 0) > 0;
     result.text = (parsed.text || 0) > 0;
+    // Content was drawn, but none of it landed on the canvas → the scene is
+    // effectively blank (almost always a data-vs-pixel coordinate mixup).
+    result.onscreen = !((parsed.paint || 0) > 0 && (parsed.conscr || 0) === 0);
   } catch (err) {
     const msg = err && err.message ? String(err.message) : String(err);
     if (/timed out|execution timed/i.test(msg)) {
