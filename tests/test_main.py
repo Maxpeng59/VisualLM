@@ -475,6 +475,21 @@ class HeadlessValidatorTests(unittest.TestCase):
         )
         self.assertTrue(r["onscreen"])
 
+    def test_drifting_subject_with_fixed_labels_detected(self):
+        # The hard case from the live Doppler run: a moving subject
+        # (xSource = -3*t) drifts off, but fixed annotations (title, origin
+        # marker) remain. On-screen content COLLAPSES from abundant early to
+        # sparse late — caught even though a few fixed elements stay visible.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const xs = -3*t; v.dot(0,0,{});"
+            " for (let i=-3;i<=3;i++){ const x=xs+i*2; if(x>=-10&&x<=10) v.line(x,-0.5,x,0.5,{}); }"
+            " v.dot(xs,0,{}); v.text('x='+xs.toFixed(1), v.X(xs), v.Y(-0.5), {});"
+            " H.text('Doppler', 24, 30, {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["onscreen"])
+
     def test_host_escape_is_contained(self):
         # process must be unreachable inside the sandbox.
         r = main.headless_validate(

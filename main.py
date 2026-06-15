@@ -420,6 +420,13 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
       the EXPLANATION: sweep the highlight through the parts, pulse the region
       being discussed, orbit the camera, or step through stages with
       `const phase = Math.floor(t % 9 / 3);`.
+    - KEEP MOVING SUBJECTS IN FRAME. Motion must LOOP, never drift away. Do NOT
+      write `x = speed * t` (the object sails off-screen and never comes back).
+      Instead oscillate — `x = A * Math.sin(t)` — or wrap — `x = (t * v) % span`
+      — or reset a phase with `t % period`. A car passing an observer should
+      loop back and pass again; a wave should keep propagating across the SAME
+      visible window. If after a few seconds your main subject would leave the
+      canvas, the scene is rejected.
 
     ### Rule 2 — every scene MUST BE LABELED with real values
 

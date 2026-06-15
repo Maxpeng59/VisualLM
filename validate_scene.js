@@ -184,10 +184,10 @@ function readStdin() {
     SANDBOX_SRC +
     "\n;(function(){var __ok=false,__err=null;try{var __s=function(ctx,t){\n" +
     code +
-    "\n};var __ts=[0,0.4,1.3,3.0,8.0,30.0];var __lc=0,__ls=0;" +
-    "for(var __i=0;__i<__ts.length;__i++){var __p0=paint,__s0=conscr;__s(ctx,__ts[__i]);__lc=paint-__p0;__ls=conscr-__s0;}__ok=true;}" +
+    "\n};var __ts=[0,0.4,1.3,3.0,8.0,30.0];var __lc=0,__ls=0,__em=0;" +
+    "for(var __i=0;__i<__ts.length;__i++){var __p0=paint,__s0=conscr;__s(ctx,__ts[__i]);__lc=paint-__p0;__ls=conscr-__s0;if(__i<__ts.length-1&&(conscr-__s0)>__em)__em=conscr-__s0;}__ok=true;}" +
     "catch(e){__ok=false;__err=(e&&e.message)?String(e.message):String(e);}" +
-    "return JSON.stringify({ok:__ok,error:__err,paint:paint,text:text,conscr:conscr,lc:__lc,ls:__ls});})()";
+    "return JSON.stringify({ok:__ok,error:__err,paint:paint,text:text,conscr:conscr,lc:__lc,ls:__ls,em:__em});})()";
 
   try {
     const context = vm.createContext(Object.create(null));
@@ -198,14 +198,18 @@ function readStdin() {
     result.paint = parsed.paint || 0;
     result.painted = (parsed.paint || 0) > 0;
     result.text = (parsed.text || 0) > 0;
-    // off-screen if: nothing ever landed on-canvas (a data-vs-pixel mixup), OR
-    // the final frame drew content but <15% of it is on-canvas (content drifted
-    // off and never loops back). A frame that draws no content isn't penalized.
+    // off-screen if any of: (a) nothing ever landed on-canvas (a data-vs-pixel
+    // mixup); (b) the final frame drew content but <15% is on-canvas; or (c) the
+    // on-screen content COLLAPSED — abundant early (>=5 on-screen draws in some
+    // early frame) but the late frame keeps under 40% of that peak, i.e. the
+    // moving subject drifted away while only fixed labels remain.
     const lc = parsed.lc || 0;
     const ls = parsed.ls || 0;
+    const em = parsed.em || 0;
     const neverOnScreen = (parsed.paint || 0) > 0 && (parsed.conscr || 0) === 0;
     const driftedOff = lc > 0 && ls * 100 < lc * 15;
-    result.onscreen = !(neverOnScreen || driftedOff);
+    const collapsed = em >= 5 && ls * 10 < em * 4;
+    result.onscreen = !(neverOnScreen || driftedOff || collapsed);
   } catch (err) {
     const msg = err && err.message ? String(err.message) : String(err);
     if (/timed out|execution timed/i.test(msg)) {
