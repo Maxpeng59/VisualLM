@@ -1159,11 +1159,16 @@ def headless_validate(code: str, timeout: float = 6.0) -> dict | None:
     validator is unavailable or itself failed (so callers skip the gate rather
     than wrongly reject a scene).
     """
-    if not code or not code.strip() or not node_validator_available():
+    # Rebind to a local so the guard narrows it to `str` for the type checker:
+    # Pylance/pyright can't carry the non-None proof across the separate
+    # node_validator_available() function (it's a module global). This inline
+    # check is De Morgan-equivalent to `not node_validator_available()`.
+    node_bin = _NODE_BIN
+    if not code or not code.strip() or not node_bin or not _VALIDATOR_PATH.exists():
         return None
     try:
         proc = subprocess.run(
-            [_NODE_BIN, str(_VALIDATOR_PATH)],
+            [node_bin, str(_VALIDATOR_PATH)],
             input=code.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
