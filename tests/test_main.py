@@ -8,6 +8,8 @@ functions monkeypatched, so no AI backend is needed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import threading
@@ -131,6 +133,57 @@ class QualityGateTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             main._try_generate(always_blank, "orig", "auto", "Test")
+
+
+class RepairHintTests(unittest.TestCase):
+    def test_error_classes_get_specific_hints(self):
+        self.assertIn("declared", main._repair_hint("ReferenceError: radius is not defined"))
+        self.assertIn("real helper", main._repair_hint("TypeError: H.glow is not a function"))
+        self.assertIn(
+            "undefined/null",
+            main._repair_hint("TypeError: Cannot read properties of undefined (reading 'x')"),
+        )
+        self.assertIn("parse", main._repair_hint("SyntaxError: Unexpected token '}'"))
+
+    def test_every_hint_demands_a_minimal_change(self):
+        for err in ["x is not defined", "boom", "", "Cannot read properties of null"]:
+            self.assertIn("SMALLEST change", main._repair_hint(err))
+
+    def test_handles_non_string_error(self):
+        self.assertIn("SMALLEST change", main._repair_hint(None))
+
+
+class RepairVisualizationTests(unittest.TestCase):
+    """repair_visualization folds the sandbox's offending line into the error
+    text handed to the provider, and leaves it clean when there's no location."""
+
+    def _capture_repair_error(self, error, where):
+        captured = {}
+
+        def fake_repair(prompt, code, err):
+            captured["error"] = err
+            return {"code": "H.background(); H.text('x', 1, 2);", "engine": "claude"}
+
+        orig_avail, orig_repair = main.claude_available, main.repair_with_claude
+        main.claude_available = lambda: {"available": True}
+        main.repair_with_claude = fake_repair
+        try:
+            main.repair_visualization("draw it", "H.circle(p.x,1,2);", error, where=where)
+        finally:
+            main.claude_available = orig_avail
+            main.repair_with_claude = orig_repair
+        return captured["error"]
+
+    def test_offending_line_is_folded_in(self):
+        err = self._capture_repair_error(
+            "Cannot read properties of undefined", "line 5: H.circle(p.x, 1, 2)"
+        )
+        self.assertIn("Cannot read properties of undefined", err)
+        self.assertIn("line 5: H.circle(p.x, 1, 2)", err)
+
+    def test_no_where_leaves_error_clean(self):
+        err = self._capture_repair_error("boom", "")
+        self.assertEqual(err, "boom")
 
 
 class NormalizeSceneTests(unittest.TestCase):
@@ -302,6 +355,218 @@ class EndpointTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("binary", body["error"].lower())
+
+    def test_handler_exception_returns_500(self):
+        # An UNEXPECTED exception in a handler (not the RuntimeError that
+        # handlers already convert to 503) must come back as a clean 500, not a
+        # dropped connection. stderr is suppressed because the guard logs the
+        # traceback by design.
+        def boom(prompt, mode):
+            raise ValueError("unexpected handler bug")
+
+        original = main.plan_visualization
+        main.plan_visualization = boom
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                status, body = self.request("POST", "/api/visualize", {"prompt": "p"})
+        finally:
+            main.plan_visualization = original
+        self.assertEqual(status, 500)
+        self.assertIn("error", body)
+
+
+class AutofixTests(unittest.TestCase):
+    def test_prefixes_bare_math(self):
+        out = main.autofix_code("r = sqrt(x*x) + sin(t) + abs(v);")
+        self.assertIn("Math.sqrt(", out)
+        self.assertIn("Math.sin(", out)
+        self.assertIn("Math.abs(", out)
+
+    def test_bare_constants(self):
+        self.assertIn("Math.PI", main.autofix_code("a = 2 * PI;"))
+        self.assertIn("H.TAU", main.autofix_code("a = TAU;"))
+
+    def test_does_not_touch_qualified_or_user_names(self):
+        out = main.autofix_code("Math.sin(x); obj.max(1,2); mySin(3); api(1);")
+        self.assertEqual(out, "Math.sin(x); obj.max(1,2); mySin(3); api(1);")
+
+    def test_skips_strings_and_comments(self):
+        out = main.autofix_code('H.text("use sin(x) here"); // call cos(y)\nr = sin(z);')
+        self.assertIn('"use sin(x) here"', out)   # string untouched
+        self.assertIn("// call cos(y)", out)       # comment untouched
+        self.assertIn("Math.sin(z)", out)          # real call fixed
+
+    def test_idempotent(self):
+        once = main.autofix_code("r = sqrt(2);")
+        self.assertEqual(once, main.autofix_code(once))
+
+    def test_sanitize_runs_autofix(self):
+        self.assertIn("Math.sin", main.sanitize_code("H.background(); const y = sin(t);"))
+
+
+@unittest.skipUnless(main.node_validator_available(), "node validator not installed")
+class HeadlessValidatorTests(unittest.TestCase):
+    def test_valid_scene_passes(self):
+        r = main.headless_validate(
+            'H.background(); const v = H.plot2d({}); v.grid(); v.axes();'
+            ' v.fn(x => Math.sin(x + t)); H.text("t=" + t, 24, 30, {});'
+        )
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["painted"])
+        self.assertTrue(r["text"])
+
+    def test_runtime_throw_caught(self):
+        r = main.headless_validate("H.background(); const a = nope.bar; H.text('x',1,2,{});")
+        self.assertFalse(r["ok"])
+        self.assertIn("nope", r["error"])
+
+    def test_blank_detected(self):
+        r = main.headless_validate("const a = 1; const b = a * 2;")
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["painted"])
+
+    def test_infinite_loop_is_killed(self):
+        r = main.headless_validate("H.background(); while (true) {}")
+        self.assertFalse(r["ok"])
+        self.assertIn("hung", r["error"].lower())
+
+    def test_const_v_shadow_does_not_collide(self):
+        # The whole reason H/cam/view/v are globals, not params.
+        r = main.headless_validate(
+            'H.background(); const v = H.plot2d({}); v.grid(); v.axes(); v.fn(x=>x); H.text("x",1,2,{});'
+        )
+        self.assertTrue(r["ok"])
+
+    def test_offscreen_draws_detected(self):
+        # The classic data-vs-pixel mixup: wrapping data-space v.line args in
+        # v.X()/v.Y() double-maps them off the canvas. Runs fine, paints, but
+        # nothing is visible.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-5,xMax:5,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " v.line(v.X(0), v.Y(0), v.X(3), v.Y(3), {}); v.text('t', 24, 30, {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["painted"])
+        self.assertFalse(r["onscreen"])
+
+    def test_onscreen_content_passes(self):
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-5,xMax:5,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " v.line(0, 0, 3, 3, {}); H.text('t', 24, 30, {});"
+        )
+        self.assertTrue(r["onscreen"])
+
+    def test_host_escape_is_contained(self):
+        # process must be unreachable inside the sandbox.
+        r = main.headless_validate(
+            'H.background(); const p = ({}).constructor.constructor("return typeof process")();'
+            ' H.text(""+p, 1, 2, {}); H.line(0,0,1,1,{}); H.circle(1,1,1,{});'
+        )
+        self.assertTrue(r["ok"])  # didn't crash, and couldn't reach process
+
+
+class EvaluateSceneTests(unittest.TestCase):
+    """evaluate_scene with the validator forced on/off via monkeypatch, so the
+    behaviour is deterministic regardless of whether node is installed."""
+
+    def setUp(self):
+        self._orig = main.headless_validate
+
+    def tearDown(self):
+        main.headless_validate = self._orig
+
+    def test_fatal_on_runtime_error(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": False, "error": "boom", "painted": False, "text": False}
+        ev = main.evaluate_scene("whatever")
+        self.assertTrue(ev["fatal"])
+        self.assertIn("boom", ev["error"])
+
+    def test_fatal_on_blank(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": False, "text": False}
+        ev = main.evaluate_scene("H.clear();")
+        self.assertTrue(ev["fatal"])
+
+    def test_static_and_unlabeled(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": False}
+        ev = main.evaluate_scene("H.background(); H.line(0,0,1,1,{});")  # no t, no text
+        self.assertFalse(ev["fatal"])
+        self.assertEqual(set(ev["problems"]), {"static", "unlabeled"})
+
+    def test_clean_scene(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": True, "onscreen": True}
+        ev = main.evaluate_scene('H.background(); H.text("t="+t,1,2,{});')
+        self.assertFalse(ev["fatal"])
+        self.assertEqual(ev["problems"], [])
+
+    def test_fatal_on_offscreen(self):
+        main.headless_validate = lambda code, timeout=6.0: {"ok": True, "error": None, "painted": True, "text": True, "onscreen": False}
+        ev = main.evaluate_scene("v.line(v.X(0),v.Y(0),v.X(3),v.Y(3),{});")
+        self.assertTrue(ev["fatal"])
+        self.assertIn("OFF-SCREEN", ev["error"])
+
+    def test_falls_back_to_static_gate_without_node(self):
+        main.headless_validate = lambda code, timeout=6.0: None
+        self.assertTrue(main.evaluate_scene("const a = 1;")["fatal"])  # blank → fatal
+        self.assertEqual(main.evaluate_scene('H.background(); H.text("t="+t,1,2); H.line(0,0,1,1);')["problems"], [])
+
+
+class SceneCacheTests(unittest.TestCase):
+    def setUp(self):
+        with main._scene_cache_lock:
+            main._scene_cache.clear()
+
+    def tearDown(self):
+        with main._scene_cache_lock:
+            main._scene_cache.clear()
+
+    def test_roundtrip_and_normalization(self):
+        scene = {"title": "T", "code": "H.background();"}
+        main.scene_cache_put("Show A Wave", "auto", scene)
+        # case/whitespace-insensitive key
+        hit = main.scene_cache_get("  show a   wave ", "auto")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["title"], "T")
+
+    def test_does_not_cache_imperfect_or_fallback(self):
+        main.scene_cache_put("p", "auto", {"title": "x", "is_fallback": True})
+        main.scene_cache_put("q", "auto", {"title": "y", "quality_warnings": ["static"]})
+        self.assertIsNone(main.scene_cache_get("p", "auto"))
+        self.assertIsNone(main.scene_cache_get("q", "auto"))
+
+    def test_mode_is_part_of_key(self):
+        main.scene_cache_put("orbit", "2d", {"title": "flat"})
+        self.assertIsNone(main.scene_cache_get("orbit", "3d"))
+
+
+class LibraryMatchTests(unittest.TestCase):
+    def test_strong_match(self):
+        # The library may hold more than one Fourier scene (hand-written +
+        # workflow-generated); any of them is a correct match for this prompt.
+        sc, score = main.library_match("show a fourier series building a square wave", "auto")
+        self.assertIsNotNone(sc)
+        self.assertIn("fourier", sc["id"])
+        self.assertGreaterEqual(score, 3.0)
+
+    def test_no_match_for_unrelated(self):
+        sc, score = main.library_match("my favorite pasta recipe", "auto")
+        self.assertEqual(score, 0.0)
+        self.assertIsNone(sc)
+
+    def test_mode_mismatch_penalized(self):
+        # dna-double-helix is 3D; forcing 2D should drop its score.
+        _, s3 = main.library_match("dna double helix", "3d")
+        _, s2 = main.library_match("dna double helix", "2d")
+        self.assertGreater(s3, s2)
+
+    def test_every_library_scene_is_runnable(self):
+        if not main.node_validator_available():
+            self.skipTest("node validator not installed")
+        for sc in main.SCENE_LIBRARY:
+            r = main.headless_validate(sc["code"])
+            self.assertIsNotNone(r, sc["id"])
+            self.assertTrue(r["ok"], f"{sc['id']} threw: {r.get('error')}")
+            self.assertTrue(r["painted"], f"{sc['id']} drew nothing")
+            self.assertTrue(r["text"], f"{sc['id']} had no labels")
 
 
 if __name__ == "__main__":
