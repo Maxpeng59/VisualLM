@@ -101,21 +101,35 @@ Generation tries providers in this order — the first one with a key wins:
 
 All cloud providers are called over plain REST — no extra SDKs required.
 
-## Run locally
+## Run it (as an app)
+
+The easy way — after a one-time setup, **no terminal needed**:
+
+1. **Set a key (once).** Copy `.env.example` to `.env` and paste your key:
+   `ANTHROPIC_API_KEY=sk-ant-...`. For Claude also run `pip install -r requirements.txt`.
+   No cloud key? Install [Ollama](https://ollama.com) and `ollama pull qwen2.5:7b`
+   for a local fallback.
+2. **Launch it.**
+   - **macOS:** double-click **`VisualLM.command`** in Finder (first time: right-click → Open to clear the macOS warning).
+   - **Any OS:** `python3 launch.py`
+
+   The launcher loads `.env`, starts the server on a free port, waits until it's
+   healthy, and opens VisualLM in its own app-style window. Keep that window open;
+   Ctrl+C (or closing it) stops everything.
+
+**Prefer a true native window** (no browser chrome at all)? `pip install pywebview`
+then `python3 desktop.py`.
+
+### Plain manual start
+
+Equivalent to what the launcher does, if you'd rather drive it yourself:
 
 ```bash
-# 1. (Recommended) enable at least one cloud generator
 pip install -r requirements.txt          # only needed for Claude
 export ANTHROPIC_API_KEY=sk-ant-...      # and/or OPENAI_API_KEY / GEMINI_API_KEY
-
-# 2. (Optional) local fallback + tutor: run Ollama with a model
-ollama pull qwen2.5:7b
-
-# 3. Start the app
-python3 main.py
+ollama pull qwen2.5:7b                    # optional local fallback + tutor
+python3 main.py                           # then open http://127.0.0.1:4173
 ```
-
-Then open <http://127.0.0.1:4173>.
 
 ## Deploy to the web
 
@@ -165,6 +179,12 @@ HTTP round-trips against every endpoint (with stubbed generators).
 - `app.js` — orchestration: sandbox runner, generate→run→repair loop, orbit
   controls, playback, tutor chat, resources, status.
 - `index.html` / `styles.css` — app structure and visual design.
+- `launch.py` / `VisualLM.command` / `desktop.py` — run VisualLM as an app:
+  the one-click launcher (loads `.env`, starts the server on a free port, opens
+  an app-style window), the macOS double-click wrapper, and the optional
+  native-window version (pywebview). `.env.example` is the key template.
+- `stem-viz-plugin/` — the scene-generation capability packaged as a portable
+  Claude skill + plugin (drop into any AI); see its own README.
 - `Dockerfile` / `render.yaml` — production deployment (Docker image bundles
   Node for the validator).
 - `tests/` — stdlib-only test suite (covers the validator, auto-fixer,
