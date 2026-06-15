@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STEM-viz runtime — scene host</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: #0e1525; color: #eef2ff;
+      font: 14px/1.5 system-ui, -apple-system, sans-serif;
+      display: grid; grid-template-columns: 420px 1fr; height: 100vh;
+    }
+    .editor { display: flex; flex-direction: column; border-right: 1px solid #26314f; min-width: 0; }
+    .editor header { padding: 12px 14px; border-bottom: 1px solid #26314f; }
+    .editor h1 { font-size: 15px; margin: 0; }
+    .editor p { margin: 4px 0 0; color: #9fb0d4; font-size: 12px; }
+    textarea {
+      flex: 1; resize: none; border: 0; padding: 12px 14px; background: #0b1120; color: #cfe0ff;
+      font: 12px/1.55 "JetBrains Mono", ui-monospace, monospace; outline: none;
+    }
+    .bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-top: 1px solid #26314f; }
+    button {
+      background: #7cc4ff; color: #06121f; border: 0; border-radius: 7px; padding: 8px 16px;
+      font-weight: 700; cursor: pointer;
+    }
+    button.ghost { background: transparent; color: #9fb0d4; border: 1px solid #26314f; font-weight: 500; }
+    #status { font-size: 12px; color: #9fb0d4; margin-left: auto; }
+    #status.err { color: #ff8aa0; }
+    #status.ok { color: #67e8b0; }
+    .stage { position: relative; display: grid; place-items: center; min-width: 0; }
+    .frame { width: 92%; height: 88%; border-radius: 12px; overflow: hidden; background: #0b1120; touch-action: none; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hint { position: absolute; bottom: 14px; right: 18px; color: #566087; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <section class="editor">
+    <header>
+      <h1>STEM-viz scene host</h1>
+      <p>Paste a <code>scene(ctx, t, H)</code> body, press Run. Drag the canvas to orbit 3D, scroll to zoom.</p>
+    </header>
+    <textarea id="code" spellcheck="false">
+H.background();
+const v = H.plot2d({ xMin: -6, xMax: 6, yMin: -2, yMax: 2 });
+v.grid(); v.axes();
+v.fn(x => Math.sin(x + t), { color: H.colors.accent, width: 3 });
+v.dot((t % 12) - 6, Math.sin((t % 12) - 6 + t), { r: 6, fill: H.colors.warn });
+H.text("y = sin(x + t)", 24, 30, { color: H.colors.ink, size: 18, weight: 700 });
+H.text("t = " + t.toFixed(2) + " s", 24, 52, { color: H.colors.sub, size: 13 });
+</textarea>
+    <div class="bar">
+      <button id="run">Run ▶</button>
+      <button id="pause" class="ghost">Pause</button>
+      <span id="status">loading…</span>
+    </div>
+  </section>
+
+  <section class="stage">
+    <div class="frame" id="frame"><canvas id="cv"></canvas></div>
+    <div class="hint">drag = orbit · scroll = zoom · double-click = reset</div>
+  </section>
+
+  <script>
+    // Minimal port of VisualLM's SandboxRunner. Spawns the bundled worker,
+    // transfers an OffscreenCanvas, and speaks the worker's message protocol.
+    const frame = document.getElementById("frame");
+    const statusEl = document.getElementById("status");
+    let worker = null, paused = false;
+
+    function setStatus(msg, kind) { statusEl.textContent = msg; statusEl.className = kind || ""; }
+
+    function dims() {
+      const r = frame.getBoundingClientRect();
+      return { width: Math.max(320, Math.round(r.width)), height: Math.max(240, Math.round(r.height)),
+               dpr: Math.min(2, window.devicePixelRatio || 1) };
+    }
+
+    function spawn() {
+      if (worker) { try { worker.terminate(); } catch (e) {} }
+      // A fresh <canvas> each spawn — transferControlToOffscreen can run once per element.
+      const old = frame.querySelector("canvas");
+      const cv = document.createElement("canvas");
+      if (old) old.replaceWith(cv); else frame.appendChild(cv);
+      const off = cv.transferControlToOffscreen();
+      worker = new Worker("./sandbox-worker.js");
+      worker.onmessage = (e) => {
+        const m = e.data || {};
+        if (m.type === "ready") { setStatus("ready", "ok"); run(); }
+        else if (m.type === "heartbeat") { if (statusEl.className !== "err") setStatus("running", "ok"); }
+        else if (m.type === "runtime-error" || m.type === "compile-error") {
+          setStatus((m.where ? m.where + " — " : "") + (m.message || "error"), "err");
+        }
+      };
+      const d = dims();
+      worker.postMessage({ type: "init", canvas: off, width: d.width, height: d.height, dpr: d.dpr }, [off]);
+    }
+
+    function run() {
+      if (!worker) return;
+      setStatus("running…");
+      worker.postMessage({ type: "run", code: document.getElementById("code").value, resetTime: true });
+      if (paused) worker.postMessage({ type: "pause" });
+    }
+
+    document.getElementById("run").addEventListener("click", () => spawn());
+    document.getElementById("pause").addEventListener("click", (e) => {
+      paused = !paused;
+      e.target.textContent = paused ? "Resume" : "Pause";
+      if (worker) worker.postMessage({ type: paused ? "pause" : "resume" });
+    });
+
+    // Drag-to-orbit + scroll-to-zoom + double-click reset (worker applies to every cam3d).
+    let dragging = false, lx = 0, ly = 0;
+    frame.addEventListener("pointerdown", (e) => { dragging = true; lx = e.clientX; ly = e.clientY; frame.setPointerCapture(e.pointerId); });
+    frame.addEventListener("pointermove", (e) => {
+      if (!dragging || !worker) return;
+      worker.postMessage({ type: "orbit", dyaw: (e.clientX - lx) * 0.008, dpitch: (e.clientY - ly) * 0.008 });
+      lx = e.clientX; ly = e.clientY;
+    });
+    const end = () => { dragging = false; };
+    frame.addEventListener("pointerup", end);
+    frame.addEventListener("pointercancel", end);
+    frame.addEventListener("wheel", (e) => { e.preventDefault(); if (worker) worker.postMessage({ type: "orbit", dzoom: Math.exp(-e.deltaY * 0.0012) }); }, { passive: false });
+    frame.addEventListener("dblclick", () => { if (worker) worker.postMessage({ type: "orbit-reset" }); });
+
+    let rz = 0;
+    window.addEventListener("resize", () => {
+      if (rz) return;
+      rz = requestAnimationFrame(() => { rz = 0; if (worker) { const d = dims(); worker.postMessage({ type: "resize", ...d }); } });
+    });
+
+    spawn();
+  </script>
+</body>
+</html>

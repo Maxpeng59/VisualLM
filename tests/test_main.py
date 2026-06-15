@@ -456,6 +456,25 @@ class HeadlessValidatorTests(unittest.TestCase):
         )
         self.assertTrue(r["onscreen"])
 
+    def test_unbounded_drift_off_screen_detected(self):
+        # pos = t*4 with no loop: by the late frame the moving content has
+        # sailed off the canvas and never returns.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const pos = t*4; for (let i=-5;i<=5;i++){ v.dot(pos+i, 0, {}); }"
+            " v.text('x='+pos.toFixed(1), v.X(pos), v.Y(2), {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["onscreen"])
+
+    def test_looping_motion_stays_on_screen(self):
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const pos = ((t*4+10)%20)-10; for (let i=-3;i<=3;i++){ v.dot(pos+i*0.3, 0, {}); }"
+            " H.text('looping', 24, 30, {});"
+        )
+        self.assertTrue(r["onscreen"])
+
     def test_host_escape_is_contained(self):
         # process must be unreachable inside the sandbox.
         r = main.headless_validate(

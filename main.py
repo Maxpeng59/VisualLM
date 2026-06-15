@@ -1389,11 +1389,15 @@ def evaluate_scene(code: str) -> dict:
         return {
             "fatal": True,
             "error": (
-                "Everything was drawn OFF-SCREEN — you mixed coordinate spaces. "
-                "H.line/H.circle/H.text take PIXEL coords (0..H.W, 0..H.H). The "
-                "plot2d view's methods (v.line/v.text/v.dot/v.path/v.circle) take "
-                "DATA coords and map them for you — do NOT wrap their arguments in "
-                "v.X()/v.Y(). Pick one space per call and keep points on-canvas."
+                "The content ended up OFF-SCREEN. Two common causes: (1) mixing "
+                "coordinate spaces — H.line/H.circle/H.text take PIXEL coords "
+                "(0..H.W, 0..H.H), while the plot2d view methods "
+                "(v.line/v.text/v.dot/v.path) take DATA coords and map them for "
+                "you, so never wrap their args in v.X()/v.Y(); (2) UNBOUNDED "
+                "motion that drifts away — e.g. pos = t*4 sails off the edge. "
+                "Make motion LOOP: use t % period, Math.sin(t), or keep the "
+                "moving subject within the visible range. Keep the main content "
+                "on-canvas the whole time."
             ),
             "problems": [],
         }
