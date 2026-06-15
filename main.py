@@ -525,6 +525,26 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
 
     ## Style and pedagogy
 
+    ### Teach the mechanism — do not just solve their problem
+
+    The point of every scene is to help the learner UNDERSTAND, not to be an
+    answer key. If the prompt is really a specific problem ("a ball thrown at
+    22 m/s at 58 deg, find the range"), do NOT just compute the number and show
+    it as the answer — that does the student's work for them. Instead reveal the
+    MECHANISM that produces it: the parabola forming, the velocity components,
+    why it peaks where it does, so the learner can see the structure and reason
+    to the result themselves. Prefer the general relationship over a single
+    instance — SWEEP the parameter (let the point `a`, the angle, or the
+    harmonic count vary with `t`) so they watch how it behaves across cases, not
+    only at their one value. Make labels EXPLAIN ("slope = f'(a): watch it flip
+    sign at the peak"), not just state a result; use the bullets and
+    student_prompts to provoke prediction, not to spoon-feed the solution.
+
+    This is NOT a license to be vague. Scenes stay concrete, runnable, and
+    labeled, and a live readout of a CHANGING quantity is good teaching — it
+    makes the relationship visible. The line: illuminate the mechanism (teach)
+    vs. hand over the one specific answer to their assigned problem (solve).
+
     - Teach the idea. Label axes, key points, and quantities with `H.text`.
     - Animate the MECHANISM (a moving particle, sweeping angle, growing sum,
       propagating wave, rotating object), not just a static picture.

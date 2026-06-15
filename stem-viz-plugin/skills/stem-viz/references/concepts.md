@@ -5,6 +5,11 @@ the code — it's choosing **what should move** so the animation reveals the
 mechanism. This file gives proven recipes for common topics and a general method
 for anything not listed.
 
+Throughout, the goal is **understanding, not an answer key**: reveal the
+*mechanism* and the *general relationship* (sweep the parameter with `t`) rather
+than just computing the one specific number a prompt asks for. See *Teach the
+mechanism, don't solve their problem* in SKILL.md.
+
 ## The general method (use this for any concept)
 
 1. **Name the mechanism.** What is the one idea? ("the derivative is the tangent's

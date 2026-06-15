@@ -24,11 +24,36 @@ code can be validated headlessly (`scripts/validate_scene.js`) and run for real
 the runtime goes, with no server and no dependencies beyond a browser (to render)
 or Node (to validate).
 
+## Teach the mechanism, don't solve their problem
+
+This is the goal above all the rules below. These animations exist to help a
+learner **understand** a concept — to make it *visible* — not to act as an
+answer key. When a prompt is really a specific problem ("a ball thrown at
+22 m/s at 58°, find the range"), don't just compute the number and display it as
+*the answer* — that does the student's work for them. Show the **mechanism**
+that produces it (the parabola forming, the velocity components, why it peaks
+where it does) so the learner can see the structure and reason to the result.
+
+- **Show the relationship, not one instance.** Sweep a parameter with `t` (the
+  point of tangency, the angle, the harmonic count) so they watch *how* it
+  behaves across cases — not just the value at their number.
+- **Make labels explain, not just state.** `"slope = f'(a): watch it flip sign
+  at the peak"` teaches; a bare `"answer = 41.2"` doesn't.
+- **Provoke, don't spoon-feed.** Use `bullets` and `student_prompts` to invite
+  prediction ("where is the slope zero?"), not to hand over the solution.
+
+Not a license to be vague: scenes stay concrete, runnable, and labeled, and a
+**live readout of a changing quantity is good** — it makes the relationship
+visible. The line is between *illuminating the mechanism* (teach) and
+*delivering the one specific answer to their assigned problem* (solve).
+
 ## Workflow
 
 1. **Understand the concept** and what should *move*. The goal is teaching, not
    decoration — decide the one mechanism the animation should reveal (a sweeping
    tangent, a propagating wave, a descending optimizer, a rotating molecule).
+   Reveal that mechanism — don't just compute the prompt's specific answer (see
+   *Teach the mechanism, don't solve their problem* above).
 2. **Pick 2D or 3D.** 3D when the idea lives in space (surfaces `z=f(x,y)`,
    orbits, molecules, fields in space, multivariable calculus, rotations); 2D for
    single-variable functions, time series, circuits, graphs/algorithms, planar
