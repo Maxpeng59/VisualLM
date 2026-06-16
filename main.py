@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 import threading
 import time
@@ -21,7 +22,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+# When bundled by PyInstaller, the static assets + validate_scene.js live in the
+# unpacked bundle dir (sys._MEIPASS), not beside a source file. Harmless when
+# not frozen (falls back to this file's directory).
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 
 # Hard caps for the in-memory resource store (single-user local app).
 MAX_RESOURCES = 12
@@ -420,6 +427,13 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
       the EXPLANATION: sweep the highlight through the parts, pulse the region
       being discussed, orbit the camera, or step through stages with
       `const phase = Math.floor(t % 9 / 3);`.
+    - KEEP MOVING SUBJECTS IN FRAME. Motion must LOOP, never drift away. Do NOT
+      write `x = speed * t` (the object sails off-screen and never comes back).
+      Instead oscillate — `x = A * Math.sin(t)` — or wrap — `x = (t * v) % span`
+      — or reset a phase with `t % period`. A car passing an observer should
+      loop back and pass again; a wave should keep propagating across the SAME
+      visible window. If after a few seconds your main subject would leave the
+      canvas, the scene is rejected.
 
     ### Rule 2 — every scene MUST BE LABELED with real values
 
@@ -517,6 +531,26 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
     so it reads as 3D even before they touch it.
 
     ## Style and pedagogy
+
+    ### Teach the mechanism — do not just solve their problem
+
+    The point of every scene is to help the learner UNDERSTAND, not to be an
+    answer key. If the prompt is really a specific problem ("a ball thrown at
+    22 m/s at 58 deg, find the range"), do NOT just compute the number and show
+    it as the answer — that does the student's work for them. Instead reveal the
+    MECHANISM that produces it: the parabola forming, the velocity components,
+    why it peaks where it does, so the learner can see the structure and reason
+    to the result themselves. Prefer the general relationship over a single
+    instance — SWEEP the parameter (let the point `a`, the angle, or the
+    harmonic count vary with `t`) so they watch how it behaves across cases, not
+    only at their one value. Make labels EXPLAIN ("slope = f'(a): watch it flip
+    sign at the peak"), not just state a result; use the bullets and
+    student_prompts to provoke prediction, not to spoon-feed the solution.
+
+    This is NOT a license to be vague. Scenes stay concrete, runnable, and
+    labeled, and a live readout of a CHANGING quantity is good teaching — it
+    makes the relationship visible. The line: illuminate the mechanism (teach)
+    vs. hand over the one specific answer to their assigned problem (solve).
 
     - Teach the idea. Label axes, key points, and quantities with `H.text`.
     - Animate the MECHANISM (a moving particle, sweeping angle, growing sum,
@@ -1078,11 +1112,25 @@ def _apply_outside_strings(code: str, transform) -> str:
     return "".join(out)
 
 
-def _autofix_math(segment: str) -> str:
-    segment = _MATH_FN_RE.sub(r"Math.\1\2", segment)
-    segment = _BARE_PI_RE.sub("Math.PI", segment)
-    segment = _BARE_TAU_RE.sub("H.TAU", segment)
+def _autofix_math(segment: str, declared: frozenset = frozenset()) -> str:
+    # Never rewrite a name the scene declares itself: a local `const PI = ...`
+    # must not become `const Math.PI = ...` (a syntax error), and a local
+    # `function log(){}` must not be rewritten to `Math.log`.
+    def _fn(m):
+        name = m.group(1)
+        return m.group(0) if name in declared else "Math." + name + m.group(2)
+
+    segment = _MATH_FN_RE.sub(_fn, segment)
+    if "PI" not in declared:
+        segment = _BARE_PI_RE.sub("Math.PI", segment)
+    if "TAU" not in declared:
+        segment = _BARE_TAU_RE.sub("H.TAU", segment)
     return segment
+
+
+# Names the scene declares for itself — excluded from the bare-Math rewrite so
+# we never corrupt an alias like `const PI = Math.PI` or a local `function sin`.
+_DECLARED_RE = re.compile(r"\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)")
 
 
 def autofix_code(code: str) -> str:
@@ -1090,13 +1138,16 @@ def autofix_code(code: str) -> str:
 
     Currently: prefix bare Math functions/constants (the dominant
     "X is not defined" cause). Applied outside strings/comments so labels and
-    comments are never corrupted. Idempotent — running it on already-correct
-    code is a no-op.
+    comments are never corrupted, and never to a name the scene declares itself
+    (so a local `const PI`/`const TAU`/`function log` is left intact rather than
+    rewritten into invalid syntax or the wrong call). Idempotent — running it on
+    already-correct code is a no-op.
     """
     if not code:
         return code
     try:
-        return _apply_outside_strings(code, _autofix_math)
+        declared = frozenset(_DECLARED_RE.findall(code))
+        return _apply_outside_strings(code, lambda seg: _autofix_math(seg, declared))
     except re.error:
         return code
 
@@ -1132,11 +1183,16 @@ def headless_validate(code: str, timeout: float = 6.0) -> dict | None:
     validator is unavailable or itself failed (so callers skip the gate rather
     than wrongly reject a scene).
     """
-    if not code or not code.strip() or not node_validator_available():
+    # Rebind to a local so the guard narrows it to `str` for the type checker:
+    # Pylance/pyright can't carry the non-None proof across the separate
+    # node_validator_available() function (it's a module global). This inline
+    # check is De Morgan-equivalent to `not node_validator_available()`.
+    node_bin = _NODE_BIN
+    if not code or not code.strip() or not node_bin or not _VALIDATOR_PATH.exists():
         return None
     try:
         proc = subprocess.run(
-            [_NODE_BIN, str(_VALIDATOR_PATH)],
+            [node_bin, str(_VALIDATOR_PATH)],
             input=code.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1174,14 +1230,69 @@ def _rewrite_declared_names(span: str) -> str:
       const W = H.W, H = H.H;       (the multi-decl that causes TDZ)
       const W = H.W,\n      H = H.H;  (multi-line)
 
-    A binding identifier is one that appears either:
-      - right after `const|let|var ` (the first declarator), or
-      - right after a comma at the top level of the statement.
+    A binding is a reserved name at bracket depth 0 that is either the first
+    declarator (right after const/let/var) or follows a top-level comma. This is
+    DEPTH-AWARE on purpose: a reserved name used as a VALUE inside ()/[]/{} —
+    `H.lerp(a, b, t)`, `[x, t]`, `H.map(x, 0, 10, t)` — is NOT a declarator and
+    must be left alone, or it becomes an undefined reference (`_t`). The old
+    comma-matching regex renamed those and silently broke very common scenes.
     """
-    pattern = re.compile(
-        r"(\b(?:const|let|var)\s+|,\s*)(" + "|".join(_RESERVED_BINDINGS) + r")\b"
-    )
-    return pattern.sub(lambda m: f"{m.group(1)}_{m.group(2)}", span)
+    m = re.match(r"\s*(?:const|let|var)\b", span)
+    if not m:
+        return span
+    reserved = set(_RESERVED_BINDINGS)
+    out = [span[: m.end()]]
+    i, n = m.end(), len(span)
+    depth = 0
+    quote = None        # active string/template delimiter, or None
+    expect = True       # the next depth-0 identifier is a declarator binding
+    while i < n:
+        ch = span[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(span[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+            expect = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ")]}":
+            depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "," and depth == 0:
+            expect = True
+            out.append(ch)
+            i += 1
+            continue
+        if expect and depth == 0 and (ch.isalpha() or ch in "_$"):
+            j = i
+            while j < n and (span[j].isalnum() or span[j] in "_$"):
+                j += 1
+            ident = span[i:j]
+            out.append("_" + ident if ident in reserved else ident)
+            expect = False
+            i = j
+            continue
+        if not ch.isspace():
+            expect = False
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def sanitize_code(code: object) -> str:
@@ -1389,11 +1500,15 @@ def evaluate_scene(code: str) -> dict:
         return {
             "fatal": True,
             "error": (
-                "Everything was drawn OFF-SCREEN — you mixed coordinate spaces. "
-                "H.line/H.circle/H.text take PIXEL coords (0..H.W, 0..H.H). The "
-                "plot2d view's methods (v.line/v.text/v.dot/v.path/v.circle) take "
-                "DATA coords and map them for you — do NOT wrap their arguments in "
-                "v.X()/v.Y(). Pick one space per call and keep points on-canvas."
+                "The content ended up OFF-SCREEN. Two common causes: (1) mixing "
+                "coordinate spaces — H.line/H.circle/H.text take PIXEL coords "
+                "(0..H.W, 0..H.H), while the plot2d view methods "
+                "(v.line/v.text/v.dot/v.path) take DATA coords and map them for "
+                "you, so never wrap their args in v.X()/v.Y(); (2) UNBOUNDED "
+                "motion that drifts away — e.g. pos = t*4 sails off the edge. "
+                "Make motion LOOP: use t % period, Math.sin(t), or keep the "
+                "moving subject within the visible range. Keep the main content "
+                "on-canvas the whole time."
             ),
             "problems": [],
         }

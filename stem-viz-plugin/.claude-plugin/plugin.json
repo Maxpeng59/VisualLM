@@ -1,0 +1,22 @@
+{
+  "name": "stem-viz",
+  "version": "1.0.0",
+  "description": "Generate, validate, and run animated 2D/3D STEM visualizations — sandboxed-JavaScript scene(ctx, t, H) animations of math, physics, ML, and CS concepts. Bundles the rendering contract, helper API, a concept→visual playbook, a self-repair protocol, a headless validator, and the portable runtime.",
+  "author": {
+    "name": "VisualLM"
+  },
+  "homepage": "https://github.com/Maxpeng59/VisualLM",
+  "license": "MIT",
+  "keywords": [
+    "visualization",
+    "animation",
+    "stem",
+    "education",
+    "math",
+    "physics",
+    "machine-learning",
+    "canvas",
+    "3d",
+    "skill"
+  ]
+}

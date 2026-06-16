@@ -4,3 +4,12 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# macOS app build artifacts (run ./make_app.sh to regenerate)
+VisualLM.app/
+VisualLM.iconset/
+VisualLM.png
+VisualLM.icns
+build/
+dist/
+*.spec.bak

@@ -40,9 +40,46 @@ class SanitizeCodeTests(unittest.TestCase):
         self.assertIn("_H = H.H", out)
         self.assertNotIn(", H =", out)
 
+    def test_keeps_real_redeclarations_renamed(self):
+        # Genuine TDZ/shadow declarations must still be renamed.
+        self.assertEqual(main.sanitize_code("const W = H.W, H = H.H;"), "const W = H.W, _H = H.H;")
+        self.assertEqual(main.sanitize_code("let H, ctx;"), "let _H, _ctx;")
+
+    def test_does_not_rewrite_reserved_used_as_values(self):
+        # t/H/ctx used as a VALUE inside a declaration's expression (after a
+        # comma within ()/[]) is NOT a declarator — renaming it to _t/_H would
+        # create an undefined reference and break a very common scene pattern.
+        for code in (
+            "const y = H.lerp(a, b, t);",
+            "const p = [Math.cos(t), t];",
+            "const v = H.map(x, 0, 10, t);",
+            "const r = Math.sin(t);",
+        ):
+            self.assertEqual(main.sanitize_code(code), code)
+
     def test_strips_import_lines(self):
         out = main.sanitize_code("import x from 'y';\nH.background();")
         self.assertNotIn("import", out)
+
+    def test_unwrap_handles_nested_braces_and_string_braces(self):
+        # rfind('}') must land on the function's OWN closing brace even when the
+        # body has nested blocks or a '}' inside a string literal.
+        out = main.sanitize_code(
+            "function scene(ctx, t) { const f = () => { return 1; }; H.circle(f(),1,2); }"
+        )
+        self.assertNotIn("function scene", out)
+        self.assertIn("const f = () => { return 1; };", out)
+        self.assertIn("H.circle(f(),1,2);", out)
+        self.assertEqual(
+            main.sanitize_code('function scene(ctx, t) { H.text("a } b", 1, 2); }'),
+            'H.text("a } b", 1, 2);',
+        )
+
+    def test_fence_and_function_wrapper_both_stripped(self):
+        self.assertEqual(
+            main.sanitize_code("```js\nfunction scene(ctx, t) {\n  H.background();\n}\n```"),
+            "H.background();",
+        )
 
     def test_non_string_returns_empty(self):
         self.assertEqual(main.sanitize_code(None), "")
@@ -400,6 +437,24 @@ class AutofixTests(unittest.TestCase):
         once = main.autofix_code("r = sqrt(2);")
         self.assertEqual(once, main.autofix_code(once))
 
+    def test_does_not_corrupt_locally_declared_names(self):
+        # A scene that declares its own PI/TAU/function must be left intact —
+        # rewriting `const PI` -> `const Math.PI` is a syntax error, and a local
+        # `log(...)` is the scene's function, not Math.log.
+        self.assertEqual(
+            main.autofix_code("const PI = Math.PI; const r = PI * 2;"),
+            "const PI = Math.PI; const r = PI * 2;",
+        )
+        self.assertEqual(
+            main.autofix_code("const TAU = 6.28; const a = TAU;"),
+            "const TAU = 6.28; const a = TAU;",
+        )
+        out = main.autofix_code("const log = (x) => x + 1; const y = log(5);")
+        self.assertNotIn("Math.log", out)
+        # ...but a genuinely bare call/constant (no local decl) is still fixed.
+        self.assertIn("Math.sin(", main.autofix_code("r = sin(t);"))
+        self.assertIn("Math.PI", main.autofix_code("a = 2 * PI;"))
+
     def test_sanitize_runs_autofix(self):
         self.assertIn("Math.sin", main.sanitize_code("H.background(); const y = sin(t);"))
 
@@ -455,6 +510,40 @@ class HeadlessValidatorTests(unittest.TestCase):
             " v.line(0, 0, 3, 3, {}); H.text('t', 24, 30, {});"
         )
         self.assertTrue(r["onscreen"])
+
+    def test_unbounded_drift_off_screen_detected(self):
+        # pos = t*4 with no loop: by the late frame the moving content has
+        # sailed off the canvas and never returns.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const pos = t*4; for (let i=-5;i<=5;i++){ v.dot(pos+i, 0, {}); }"
+            " v.text('x='+pos.toFixed(1), v.X(pos), v.Y(2), {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["onscreen"])
+
+    def test_looping_motion_stays_on_screen(self):
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const pos = ((t*4+10)%20)-10; for (let i=-3;i<=3;i++){ v.dot(pos+i*0.3, 0, {}); }"
+            " H.text('looping', 24, 30, {});"
+        )
+        self.assertTrue(r["onscreen"])
+
+    def test_drifting_subject_with_fixed_labels_detected(self):
+        # The hard case from the live Doppler run: a moving subject
+        # (xSource = -3*t) drifts off, but fixed annotations (title, origin
+        # marker) remain. On-screen content COLLAPSES from abundant early to
+        # sparse late — caught even though a few fixed elements stay visible.
+        r = main.headless_validate(
+            "const v = H.plot2d({xMin:-10,xMax:10,yMin:-5,yMax:5}); v.grid(); v.axes();"
+            " const xs = -3*t; v.dot(0,0,{});"
+            " for (let i=-3;i<=3;i++){ const x=xs+i*2; if(x>=-10&&x<=10) v.line(x,-0.5,x,0.5,{}); }"
+            " v.dot(xs,0,{}); v.text('x='+xs.toFixed(1), v.X(xs), v.Y(-0.5), {});"
+            " H.text('Doppler', 24, 30, {});"
+        )
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["onscreen"])
 
     def test_host_escape_is_contained(self):
         # process must be unreachable inside the sandbox.
