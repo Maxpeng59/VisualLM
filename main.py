@@ -1112,11 +1112,25 @@ def _apply_outside_strings(code: str, transform) -> str:
     return "".join(out)
 
 
-def _autofix_math(segment: str) -> str:
-    segment = _MATH_FN_RE.sub(r"Math.\1\2", segment)
-    segment = _BARE_PI_RE.sub("Math.PI", segment)
-    segment = _BARE_TAU_RE.sub("H.TAU", segment)
+def _autofix_math(segment: str, declared: frozenset = frozenset()) -> str:
+    # Never rewrite a name the scene declares itself: a local `const PI = ...`
+    # must not become `const Math.PI = ...` (a syntax error), and a local
+    # `function log(){}` must not be rewritten to `Math.log`.
+    def _fn(m):
+        name = m.group(1)
+        return m.group(0) if name in declared else "Math." + name + m.group(2)
+
+    segment = _MATH_FN_RE.sub(_fn, segment)
+    if "PI" not in declared:
+        segment = _BARE_PI_RE.sub("Math.PI", segment)
+    if "TAU" not in declared:
+        segment = _BARE_TAU_RE.sub("H.TAU", segment)
     return segment
+
+
+# Names the scene declares for itself — excluded from the bare-Math rewrite so
+# we never corrupt an alias like `const PI = Math.PI` or a local `function sin`.
+_DECLARED_RE = re.compile(r"\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)")
 
 
 def autofix_code(code: str) -> str:
@@ -1124,13 +1138,16 @@ def autofix_code(code: str) -> str:
 
     Currently: prefix bare Math functions/constants (the dominant
     "X is not defined" cause). Applied outside strings/comments so labels and
-    comments are never corrupted. Idempotent — running it on already-correct
-    code is a no-op.
+    comments are never corrupted, and never to a name the scene declares itself
+    (so a local `const PI`/`const TAU`/`function log` is left intact rather than
+    rewritten into invalid syntax or the wrong call). Idempotent — running it on
+    already-correct code is a no-op.
     """
     if not code:
         return code
     try:
-        return _apply_outside_strings(code, _autofix_math)
+        declared = frozenset(_DECLARED_RE.findall(code))
+        return _apply_outside_strings(code, lambda seg: _autofix_math(seg, declared))
     except re.error:
         return code
 

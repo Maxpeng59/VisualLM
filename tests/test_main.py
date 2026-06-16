@@ -400,6 +400,24 @@ class AutofixTests(unittest.TestCase):
         once = main.autofix_code("r = sqrt(2);")
         self.assertEqual(once, main.autofix_code(once))
 
+    def test_does_not_corrupt_locally_declared_names(self):
+        # A scene that declares its own PI/TAU/function must be left intact —
+        # rewriting `const PI` -> `const Math.PI` is a syntax error, and a local
+        # `log(...)` is the scene's function, not Math.log.
+        self.assertEqual(
+            main.autofix_code("const PI = Math.PI; const r = PI * 2;"),
+            "const PI = Math.PI; const r = PI * 2;",
+        )
+        self.assertEqual(
+            main.autofix_code("const TAU = 6.28; const a = TAU;"),
+            "const TAU = 6.28; const a = TAU;",
+        )
+        out = main.autofix_code("const log = (x) => x + 1; const y = log(5);")
+        self.assertNotIn("Math.log", out)
+        # ...but a genuinely bare call/constant (no local decl) is still fixed.
+        self.assertIn("Math.sin(", main.autofix_code("r = sin(t);"))
+        self.assertIn("Math.PI", main.autofix_code("a = 2 * PI;"))
+
     def test_sanitize_runs_autofix(self):
         self.assertIn("Math.sin", main.sanitize_code("H.background(); const y = sin(t);"))
 
