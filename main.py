@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 import threading
 import time
@@ -21,7 +22,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+# When bundled by PyInstaller, the static assets + validate_scene.js live in the
+# unpacked bundle dir (sys._MEIPASS), not beside a source file. Harmless when
+# not frozen (falls back to this file's directory).
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 
 # Hard caps for the in-memory resource store (single-user local app).
 MAX_RESOURCES = 12
