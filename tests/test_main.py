@@ -61,6 +61,26 @@ class SanitizeCodeTests(unittest.TestCase):
         out = main.sanitize_code("import x from 'y';\nH.background();")
         self.assertNotIn("import", out)
 
+    def test_unwrap_handles_nested_braces_and_string_braces(self):
+        # rfind('}') must land on the function's OWN closing brace even when the
+        # body has nested blocks or a '}' inside a string literal.
+        out = main.sanitize_code(
+            "function scene(ctx, t) { const f = () => { return 1; }; H.circle(f(),1,2); }"
+        )
+        self.assertNotIn("function scene", out)
+        self.assertIn("const f = () => { return 1; };", out)
+        self.assertIn("H.circle(f(),1,2);", out)
+        self.assertEqual(
+            main.sanitize_code('function scene(ctx, t) { H.text("a } b", 1, 2); }'),
+            'H.text("a } b", 1, 2);',
+        )
+
+    def test_fence_and_function_wrapper_both_stripped(self):
+        self.assertEqual(
+            main.sanitize_code("```js\nfunction scene(ctx, t) {\n  H.background();\n}\n```"),
+            "H.background();",
+        )
+
     def test_non_string_returns_empty(self):
         self.assertEqual(main.sanitize_code(None), "")
         self.assertEqual(main.sanitize_code(42), "")
