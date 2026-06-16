@@ -40,6 +40,23 @@ class SanitizeCodeTests(unittest.TestCase):
         self.assertIn("_H = H.H", out)
         self.assertNotIn(", H =", out)
 
+    def test_keeps_real_redeclarations_renamed(self):
+        # Genuine TDZ/shadow declarations must still be renamed.
+        self.assertEqual(main.sanitize_code("const W = H.W, H = H.H;"), "const W = H.W, _H = H.H;")
+        self.assertEqual(main.sanitize_code("let H, ctx;"), "let _H, _ctx;")
+
+    def test_does_not_rewrite_reserved_used_as_values(self):
+        # t/H/ctx used as a VALUE inside a declaration's expression (after a
+        # comma within ()/[]) is NOT a declarator — renaming it to _t/_H would
+        # create an undefined reference and break a very common scene pattern.
+        for code in (
+            "const y = H.lerp(a, b, t);",
+            "const p = [Math.cos(t), t];",
+            "const v = H.map(x, 0, 10, t);",
+            "const r = Math.sin(t);",
+        ):
+            self.assertEqual(main.sanitize_code(code), code)
+
     def test_strips_import_lines(self):
         out = main.sanitize_code("import x from 'y';\nH.background();")
         self.assertNotIn("import", out)

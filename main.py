@@ -1230,14 +1230,69 @@ def _rewrite_declared_names(span: str) -> str:
       const W = H.W, H = H.H;       (the multi-decl that causes TDZ)
       const W = H.W,\n      H = H.H;  (multi-line)
 
-    A binding identifier is one that appears either:
-      - right after `const|let|var ` (the first declarator), or
-      - right after a comma at the top level of the statement.
+    A binding is a reserved name at bracket depth 0 that is either the first
+    declarator (right after const/let/var) or follows a top-level comma. This is
+    DEPTH-AWARE on purpose: a reserved name used as a VALUE inside ()/[]/{} —
+    `H.lerp(a, b, t)`, `[x, t]`, `H.map(x, 0, 10, t)` — is NOT a declarator and
+    must be left alone, or it becomes an undefined reference (`_t`). The old
+    comma-matching regex renamed those and silently broke very common scenes.
     """
-    pattern = re.compile(
-        r"(\b(?:const|let|var)\s+|,\s*)(" + "|".join(_RESERVED_BINDINGS) + r")\b"
-    )
-    return pattern.sub(lambda m: f"{m.group(1)}_{m.group(2)}", span)
+    m = re.match(r"\s*(?:const|let|var)\b", span)
+    if not m:
+        return span
+    reserved = set(_RESERVED_BINDINGS)
+    out = [span[: m.end()]]
+    i, n = m.end(), len(span)
+    depth = 0
+    quote = None        # active string/template delimiter, or None
+    expect = True       # the next depth-0 identifier is a declarator binding
+    while i < n:
+        ch = span[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(span[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+            expect = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ")]}":
+            depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "," and depth == 0:
+            expect = True
+            out.append(ch)
+            i += 1
+            continue
+        if expect and depth == 0 and (ch.isalpha() or ch in "_$"):
+            j = i
+            while j < n and (span[j].isalnum() or span[j] in "_$"):
+                j += 1
+            ident = span[i:j]
+            out.append("_" + ident if ident in reserved else ident)
+            expect = False
+            i = j
+            continue
+        if not ch.isspace():
+            expect = False
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def sanitize_code(code: object) -> str:
