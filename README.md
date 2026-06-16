@@ -120,6 +120,13 @@ The easy way — after a one-time setup, **no terminal needed**:
 **Prefer a true native window** (no browser chrome at all)? `pip install pywebview`
 then `python3 desktop.py`.
 
+**Want a real, self-contained app** (bundles Python — no terminal, no repo needed
+to run)? `./build_app.sh` produces **`dist/VisualLM.app`** via PyInstaller; move it
+to /Applications and double-click. It runs the server in-process (`app_main.py`)
+and serves bundled assets. For Claude inside the bundle, `pip install anthropic`
+before building; for a native window, `pip install pywebview` before building.
+The packaged app reads a `.env` placed next to `VisualLM.app` or in `~/.visuallm/`.
+
 ### Plain manual start
 
 Equivalent to what the launcher does, if you'd rather drive it yourself:

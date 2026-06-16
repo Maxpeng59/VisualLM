@@ -24,8 +24,24 @@ import launch  # reuse load_dotenv / free_port / wait_healthy / open_app_window
 HERE = Path(__file__).resolve().parent
 
 
+def _env_files() -> list[Path]:
+    """Where to look for a .env. When frozen (inside VisualLM.app) __file__ is
+    in the bundle, so also check next to the .app and a per-user config dir —
+    that's where a user can drop ANTHROPIC_API_KEY=... for the packaged app."""
+    if getattr(sys, "frozen", False):
+        out: list[Path] = []
+        exe = Path(sys.executable).resolve()
+        # .../VisualLM.app/Contents/MacOS/VisualLM -> the folder holding the .app
+        if len(exe.parents) >= 4:
+            out.append(exe.parents[3] / ".env")
+        out.append(Path.home() / ".visuallm" / ".env")
+        return out
+    return [HERE / ".env"]
+
+
 def main() -> int:
-    launch.load_dotenv(HERE / ".env")
+    for env_file in _env_files():
+        launch.load_dotenv(env_file)
     forced = os.environ.get("VISUALLM_PORT")
     port = int(forced) if forced else launch.free_port(4173)
     os.environ["VISUALLM_PORT"] = str(port)
@@ -47,8 +63,17 @@ def main() -> int:
             return 1
         print(f"✓ VisualLM is up on {url}")
         if smoke:
-            print("✓ Smoke check passed.")
-            return 0
+            # Also confirm static assets serve — the real test that bundled data
+            # files (index.html etc.) resolve via BASE_DIR when frozen.
+            import urllib.request
+            try:
+                with urllib.request.urlopen(url + "/", timeout=3) as r:
+                    served = r.status == 200 and b"VisualLM" in r.read()
+            except Exception:  # noqa: BLE001
+                served = False
+            print("✓ static assets served (index.html)" if served else "✗ static assets NOT served")
+            print("✓ Smoke check passed." if served else "✗ Smoke check FAILED.")
+            return 0 if served else 1
         if no_window:
             print(f"  Open {url} in your browser. Ctrl+C to stop.")
             _block()
