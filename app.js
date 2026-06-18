@@ -54,19 +54,36 @@
     s = s.replace(/(?<!\$)\$([^\s$][^$\n]*?[^\s$])\$(?!\$)/g, "$1");
     s = s.replace(/(?<!\$)\$([^\s$])\$(?!\$)/g, "$1");
 
-    // \frac{a}{b} -> a/b (parenthesize compound numerator/denominator).
-    s = s.replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, (_, a, b) => {
+    // Degree: \circ and ^\circ -> ° (do this BEFORE the greek fallback, which
+    // would otherwise turn \circ into the literal word "circ", e.g. 58^circ).
+    s = s.replace(/\^?\s*\\circ\b/g, "°");
+    s = s.replace(/\\degrees?\b/g, "°");
+
+    // LaTeX spacing macros (\, \; \: \! \quad \qquad and backslash-space) -> a
+    // single space. The greek fallback ignores these (\, isn't a letter run),
+    // so without this they survive as literal "\," junk.
+    s = s.replace(/\\(?:quad|qquad)\b/g, " ");
+    s = s.replace(/\\[,;:!> ]/g, " ");
+
+    // \mathrm/\mathbf/\operatorname{...} -> just the inner text.
+    s = s.replace(/\\(?:mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}/g, "$1");
+
+    // \frac{a}{b} -> a/b. Tolerate doubled braces {{...}} that local models
+    // sometimes emit, and parenthesize a compound numerator/denominator.
+    s = s.replace(/\\frac\s*\{+([^{}]+)\}+\s*\{+([^{}]+)\}+/g, (_, a, b) => {
+      a = a.trim();
+      b = b.trim();
       const parenA = /[+\-]/.test(a) ? `(${a})` : a;
       const parenB = /[+\-]/.test(b) ? `(${b})` : b;
       return `${parenA}/${parenB}`;
     });
     // \sqrt{a} -> sqrt(a)
-    s = s.replace(/\\sqrt\s*\{([^{}]+)\}/g, "sqrt($1)");
+    s = s.replace(/\\sqrt\s*\{+([^{}]+)\}+/g, "sqrt($1)");
     // \text{a} -> a
     s = s.replace(/\\text\s*\{([^{}]*)\}/g, "$1");
-    // Subscripts / superscripts: x_{n} -> x_n, x^{2} -> x^2
-    s = s.replace(/_\{([^{}]+)\}/g, "_$1");
-    s = s.replace(/\^\{([^{}]+)\}/g, "^$1");
+    // Subscripts / superscripts: x_{n} -> x_n, x^{2} -> x^2 (doubled braces too)
+    s = s.replace(/_\{+([^{}]+)\}+/g, "_$1");
+    s = s.replace(/\^\{+([^{}]+)\}+/g, "^$1");
 
     // Greek + common symbols / function names.
     s = s.replace(/\\([A-Za-z]+)/g, (_, name) =>
@@ -74,6 +91,8 @@
     );
     // Stray "left"/"right" sizing markers — leave the inner brackets.
     s = s.replace(/\b(left|right)\b/g, "");
+    // Any lone backslash left before whitespace/punctuation is LaTeX residue.
+    s = s.replace(/\\(?=[\s.,;:)\]}])/g, "");
     // Tidy spaces.
     return s.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n");
   }
@@ -936,24 +955,39 @@
         role: "assistant",
         content:
           `This is "${scene.title}". ${scene.summary} ` +
-          "Ask me anything about what you're seeing, the math behind it, or for a practice problem.",
+          "Ask me anything — or ask me to solve a problem step by step and I'll " +
+          "show what you need, each step, and where it applies.",
       },
     ];
     renderChat();
   }
 
+  // A persistent quick-action that puts the tutor into step-by-step solve mode.
+  // Filling the box (rather than auto-sending) lets the student append their
+  // own numbers first, e.g. "...for v0 = 20 m/s and angle = 30 degrees".
+  const SOLVE_PROMPT = "Solve this step by step: show what's needed, each step, and where it applies.";
+
+  function addSuggestionChip(text, opts) {
+    const btn = document.createElement("button");
+    btn.className = "suggestion-chip" + (opts && opts.solve ? " solve" : "");
+    btn.type = "button";
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      el.chatInput.value = (opts && opts.value) || text;
+      el.chatInput.focus();
+      // Put the caret at the end so the student can keep typing their specifics.
+      const v = el.chatInput.value;
+      el.chatInput.setSelectionRange(v.length, v.length);
+    });
+    el.chatSuggestions.appendChild(btn);
+  }
+
   function renderSuggestions(scene) {
     el.chatSuggestions.innerHTML = "";
+    // Always offer the step-by-step solver first.
+    addSuggestionChip("Solve it step by step", { solve: true, value: SOLVE_PROMPT });
     (scene.student_prompts || []).slice(0, 4).forEach((prompt) => {
-      const btn = document.createElement("button");
-      btn.className = "suggestion-chip";
-      btn.type = "button";
-      btn.textContent = prompt;
-      btn.addEventListener("click", () => {
-        el.chatInput.value = prompt;
-        el.chatInput.focus();
-      });
-      el.chatSuggestions.appendChild(btn);
+      addSuggestionChip(prompt);
     });
   }
 

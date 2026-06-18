@@ -24,9 +24,12 @@ from pathlib import Path
 
 # When bundled by PyInstaller, the static assets + validate_scene.js live in the
 # unpacked bundle dir (sys._MEIPASS), not beside a source file. Harmless when
-# not frozen (falls back to this file's directory).
-if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    BASE_DIR = Path(sys._MEIPASS)
+# not frozen (falls back to this file's directory). _MEIPASS is injected by the
+# PyInstaller bootloader at runtime and isn't in the type stubs, so read it via
+# getattr to keep static type-checkers (Pylance/Pyright) quiet.
+_meipass = getattr(sys, "_MEIPASS", None)
+if getattr(sys, "frozen", False) and _meipass:
+    BASE_DIR = Path(_meipass)
 else:
     BASE_DIR = Path(__file__).resolve().parent
 
@@ -2034,6 +2037,31 @@ def build_tutor_system_prompt(viz: dict) -> str:
         - Warm, clear, and student-friendly. Tie explanations to the animation.
         - Short step-by-step reasoning for math/physics.
         - End with one short follow-up question or practice suggestion.
+
+        SOLVING A PROBLEM — when the student asks you to solve, find, calculate,
+        derive, or "how do I do this", do NOT just give the final answer. Walk
+        through the METHOD so they could repeat it themselves, using exactly
+        these labeled sections (each label on its own line, plain text):
+
+        Goal: one line naming what we solve for — its symbol and unit.
+
+        What you need: the relationship(s)/formula(s) that apply, plus every
+        known quantity. For each known, give symbol = value (with unit) and say
+        WHERE it comes from: stated in the problem, a known constant, or read
+        off the animation on screen. Call out anything still unknown.
+
+        Steps: numbered. Each step does ONE thing — say what you do and WHY,
+        substitute the specific values you need RIGHT THERE, and show the
+        intermediate result with units. When a step corresponds to something on
+        screen, point to it (e.g. "this is the slope of the tangent line you
+        see sweeping the curve").
+
+        Answer: the final result with units, then a one-line sanity check (does
+        the sign/size make sense?).
+
+        If the student gave no numbers, solve it symbolically and show exactly
+        where each quantity would be plugged in. Keep it focused; still end with
+        one short follow-up question.
 
         Output format — STRICT. The chat window shows plain text only.
         - NO LaTeX of any kind. Do not write \\(...\\), \\[...\\], $...$,

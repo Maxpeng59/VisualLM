@@ -106,7 +106,8 @@ H.legend([{ label: "sin", color: H.colors.good }, { label: "cos", color: H.color
         "summary": "A launched projectile follows a parabola; horizontal speed is constant, vertical speed changes under gravity.",
         "keywords": [
             "projectile", "projectile motion", "parabola", "trajectory", "launch",
-            "gravity", "kinematics", "ballistic", "range", "velocity",
+            "launched", "gravity", "kinematics", "ballistic", "range", "velocity",
+            "angle", "degrees", "thrown", "ball",
         ],
         "bullets": [
             "Horizontal velocity stays constant; only gravity acts vertically.",
@@ -343,7 +344,7 @@ H.text((charging ? "charging" : "discharging") + "   V = " + V.toFixed(2) + " V"
         "summary": "Two sugar-phosphate backbones twist around a common axis, joined by base pairs.",
         "keywords": [
             "dna", "double helix", "helix", "genetics", "base pairs", "nucleotide",
-            "molecular biology", "strands", "chromosome",
+            "molecular biology", "strands", "strand", "chromosome", "structure",
         ],
         "bullets": [
             "Two strands run in opposite (antiparallel) directions.",

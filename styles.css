@@ -777,6 +777,14 @@ textarea:focus, input[type="text"]:focus {
   transition: background 120ms ease, border-color 120ms ease;
 }
 .suggestion-chip:hover { background: var(--hover); border-color: var(--border-2); }
+/* The step-by-step solver: stands out as the primary tutor action. */
+.suggestion-chip.solve {
+  border-color: var(--info);
+  color: var(--info);
+  font-weight: 600;
+}
+.suggestion-chip.solve::before { content: "→ "; opacity: 0.8; }
+.suggestion-chip.solve:hover { background: color-mix(in srgb, var(--info) 12%, transparent); }
 
 /* ============================================================== */
 /* Responsive                                                     */
