@@ -1701,6 +1701,15 @@ try:
 except Exception:  # noqa: BLE001 — library is optional; never block startup
     SCENE_LIBRARY = []
 
+# Parameterized "interactive textbook" demos (Algebra 1 -> Precalculus). When a
+# prompt classifies to a curriculum topic, we show one of these — the student
+# edits its values live (the `params`) and reads the explanation — instead of
+# generating code. This is the retrieval-first, fill-in-the-values path.
+try:
+    from demo_library import DEMO_LIBRARY  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    DEMO_LIBRARY = []
+
 _scene_cache_lock = threading.Lock()
 _scene_cache: dict[tuple, dict] = {}
 _SCENE_CACHE_MAX = 256
@@ -1799,12 +1808,79 @@ def _has_cloud() -> bool:
     return bool(_cloud_generators())
 
 
+# --- Parameterized demo classification (the "fill in the values" path) -------
+
+def _demo_scored(prompt: str) -> list[tuple[dict, float]]:
+    """All demos scored against the prompt, best first (score > 0). Reuses the
+    library scorer; mode is 'auto' so a 2D demo isn't penalized by a 3D hint."""
+    if not DEMO_LIBRARY:
+        return []
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
+    scored = [(d, _scene_score(d, ptext, ptoks, "auto")) for d in DEMO_LIBRARY]
+    scored = [t for t in scored if t[1] > 0]
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored
+
+
+def demo_match(prompt: str) -> tuple[dict | None, float]:
+    """Classify a prompt to its best curriculum demo (None = no clear topic)."""
+    scored = _demo_scored(prompt)
+    return scored[0] if scored else (None, 0.0)
+
+
+def _demo_scene(demo: dict, prompt: str) -> dict:
+    """Shape a demo into a scene response carrying its editable `params` and the
+    teaching `explanation` the UI renders alongside the live graph."""
+    expl = demo.get("explanation", "")
+    bullets = [str(b) for b in demo.get("bullets", [])][:4] or [
+        "Drag the sliders on the right and watch the graph respond.",
+        "The picture updates live as you change each value.",
+    ]
+    return {
+        "title": demo.get("title", "Interactive demo"),
+        "tag": demo.get("area", "STEM"),
+        "dimension": "3D" if str(demo.get("dimension", "")).lower().startswith("3") else "2D",
+        "equation": demo.get("equation", ""),
+        "summary": expl,
+        "bullets": bullets,
+        "student_prompts": [str(p) for p in demo.get("student_prompts", [])][:4] or [
+            "Why does changing this value have that effect on the graph?",
+            "What happens at the extreme settings?",
+            "How does the picture connect back to the formula?",
+        ],
+        "code": sanitize_code(demo.get("code", "")),
+        "params": [dict(p) for p in demo.get("params", [])],
+        "explanation": expl,
+        "topic": demo.get("topic", ""),
+        "area": demo.get("area", ""),
+        "demo_id": demo.get("id", ""),
+        "model": "demo",
+        "engine": "demo",
+        "prompt": prompt,
+        "from_demo": True,
+    }
+
+
+# Demo fires on a clear topic hit (a couple of keyword/title matches). Below
+# this, fall through to the scene library / generative path.
+_DEMO_THRESHOLD = 2.0
+
+
 def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     # 1. Exact-prompt cache — instant repeat for an already-validated scene.
     cached = scene_cache_get(prompt, preferred_mode)
     if cached:
         cached["cached"] = True
         return cached
+
+    # 1.5 Curriculum demo — the interactive "fill in the values" path. If the
+    #     prompt clearly names an Algebra-1..Precalc topic, show its parameterized
+    #     demo (editable + explained) rather than generating code. Takes priority
+    #     over the static library so an interactive version wins when both exist.
+    demo, demo_score = demo_match(prompt)
+    if demo is not None and demo_score >= _DEMO_THRESHOLD:
+        return _demo_scene(demo, prompt)
 
     # 2. Strong curated match — instant, known-correct. The bar is high when a
     #    cloud model is available (the user likely wants a custom take), and

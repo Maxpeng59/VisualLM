@@ -75,6 +75,7 @@ let frameCount = 0;
 let consecutiveErrors = 0;
 let everRendered = false;
 let lastCode = ""; // raw source of the running scene, for offending-line lookup
+let curParams = {}; // user-set demo parameters, exposed to the scene as `P`
 let loopTimer = null;
 
 const FRAME_MS = 1000 / 60;
@@ -902,6 +903,7 @@ function compile(code) {
   //
   // ctx is kept as a parameter (we never see the model redeclare it).
   self.H = HELP;
+  self.P = curParams; // demo parameters; a scene reads P.<name>, updated live
   /* eslint-disable no-new-func */
   const factory = new Function(
     "ctx",
@@ -1021,6 +1023,7 @@ self.onmessage = (e) => {
     }
     case "run": {
       try {
+        curParams = m.params && typeof m.params === "object" ? m.params : {};
         const fn = compile(m.code);
         sceneFn = fn;
         lastCode = typeof m.code === "string" ? m.code : "";
@@ -1057,6 +1060,14 @@ self.onmessage = (e) => {
       break;
     case "speed":
       speed = m.value;
+      break;
+    case "params":
+      // Live demo-parameter update from the UI sliders. Mutate in place so the
+      // running scene (which reads the `P` global each frame) sees new values
+      // immediately — no recompile, no flicker.
+      if (m.values && typeof m.values === "object") {
+        for (const k in m.values) curParams[k] = m.values[k];
+      }
       break;
     case "orbit":
       // Camera drag/zoom from the main thread. Applied inside cam3d.project,

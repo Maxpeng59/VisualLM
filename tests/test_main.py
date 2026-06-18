@@ -658,5 +658,83 @@ class LibraryMatchTests(unittest.TestCase):
             self.assertTrue(r["text"], f"{sc['id']} had no labels")
 
 
+class DemoLibraryTests(unittest.TestCase):
+    """The parameterized 'fill in the values' curriculum demos."""
+
+    def test_library_nonempty(self):
+        self.assertGreater(len(main.DEMO_LIBRARY), 0)
+
+    def test_each_demo_well_formed(self):
+        seen_ids = set()
+        for d in main.DEMO_LIBRARY:
+            did = d.get("id")
+            self.assertTrue(did, "demo missing id")
+            self.assertNotIn(did, seen_ids, f"duplicate demo id {did}")
+            seen_ids.add(did)
+            for key in ("title", "area", "topic", "explanation", "code", "keywords", "params"):
+                self.assertIn(key, d, f"{did} missing {key}")
+            self.assertTrue(d["code"].strip(), f"{did} has empty code")
+            self.assertTrue(d["explanation"].strip(), f"{did} has no explanation")
+            self.assertTrue(d["params"], f"{did} has no params to fill in")
+            for p in d["params"]:
+                for key in ("name", "label", "min", "max", "step", "value"):
+                    self.assertIn(key, p, f"{did}.{p.get('name')} missing {key}")
+                self.assertLessEqual(p["min"], p["value"], f"{did}.{p['name']} value < min")
+                self.assertLessEqual(p["value"], p["max"], f"{did}.{p['name']} value > max")
+                self.assertGreater(p["step"], 0, f"{did}.{p['name']} step must be > 0")
+                # The code must actually read the parameter (P.<name>).
+                self.assertIn(f"P.{p['name']}", d["code"], f"{did} never reads P.{p['name']}")
+
+    def test_every_demo_is_runnable(self):
+        if not main.node_validator_available():
+            self.skipTest("node validator not installed")
+        for d in main.DEMO_LIBRARY:
+            code = main.sanitize_code(d["code"])
+            r = main.headless_validate(code)
+            self.assertIsNotNone(r, d["id"])
+            self.assertTrue(r["ok"], f"{d['id']} threw: {r.get('error')}")
+            self.assertTrue(r["painted"], f"{d['id']} drew nothing")
+            self.assertTrue(r["text"], f"{d['id']} had no labels")
+
+    def test_match_routes_curriculum_prompt(self):
+        cases = [
+            ("slope intercept form of a line", "linear-slope-intercept"),
+            ("graph a quadratic and show the vertex", "quadratic-vertex"),
+            ("discriminant of a quadratic equation", "quadratic-discriminant"),
+            ("exponential growth and decay", "exponential-growth-decay"),
+            ("unit circle with degrees", "unit-circle"),
+            ("sine wave amplitude and period", "sine-wave"),
+        ]
+        for prompt, expected in cases:
+            d, score = main.demo_match(prompt)
+            self.assertIsNotNone(d, prompt)
+            self.assertEqual(d["id"], expected, prompt)
+            self.assertGreaterEqual(score, main._DEMO_THRESHOLD, prompt)
+
+    def test_no_match_for_unrelated(self):
+        d, score = main.demo_match("my favorite pasta recipe")
+        self.assertIsNone(d)
+        self.assertEqual(score, 0.0)
+
+    def test_demo_scene_shape(self):
+        d, _ = main.demo_match("slope intercept form of a line")
+        scene = main._demo_scene(d, "slope intercept form of a line")
+        self.assertTrue(scene["from_demo"])
+        self.assertEqual(scene["engine"], "demo")
+        self.assertTrue(scene["code"].strip())
+        self.assertTrue(scene["explanation"].strip())
+        self.assertTrue(scene["params"])
+        self.assertIn(scene["dimension"], ("2D", "3D"))
+        # params must be copies, not aliases into the library (UI mutates them).
+        self.assertIsNot(scene["params"][0], d["params"][0])
+
+    def test_plan_routes_to_demo(self):
+        # A clear topic prompt should resolve to the interactive demo before any
+        # network/generative path (demo check sits after the exact-prompt cache).
+        plan = main.plan_visualization("show me slope intercept form of a line", "auto")
+        self.assertTrue(plan.get("from_demo"), plan.get("engine"))
+        self.assertEqual(plan["demo_id"], "linear-slope-intercept")
+
+
 if __name__ == "__main__":
     unittest.main()

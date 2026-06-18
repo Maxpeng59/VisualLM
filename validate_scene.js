@@ -153,6 +153,10 @@ var ctx = makeCtx();
 var cam = H.cam3d({});
 var view = H.plot2d({});
 var v = view;
+// Demo parameters: a real run gets concrete values from the UI; for validation
+// any P.<name> resolves to 1 (a safe non-zero default) so parameterized demo
+// code runs without "P is not defined".
+var P = new Proxy({}, { get: function(){ return 1; } });
 `;
 
 function readStdin() {

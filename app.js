@@ -341,7 +341,7 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=16");
+      const worker = new Worker("./sandbox-worker.js?v=17");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
@@ -395,8 +395,9 @@
       else p.reject(err);
     }
 
-    /* Load code and resolve once it renders a frame; reject on error/hang. */
-    async run(code) {
+    /* Load code and resolve once it renders a frame; reject on error/hang.
+     * `params` seeds the demo `P` global (editable live via setParams). */
+    async run(code, params) {
       await this._whenReady();
       if (this.pending && !this.pending.settled) this._settle(false, new Error("superseded"));
 
@@ -408,7 +409,7 @@
           this._spawn(); // kill the frozen worker and start a fresh one
           this._settle(false, new Error("The animation hung (possible infinite loop)."));
         }, 3000);
-        this.worker.postMessage({ type: "run", code, resetTime: true });
+        this.worker.postMessage({ type: "run", code, params: params || {}, resetTime: true });
         if (this.paused) this.worker.postMessage({ type: "pause" });
         this.worker.postMessage({ type: "speed", value: this.speed });
       });
@@ -425,6 +426,10 @@
     setSpeed(value) {
       this.speed = value;
       if (this.worker) this.worker.postMessage({ type: "speed", value });
+    }
+    /* Live-update demo parameters without recompiling the scene. */
+    setParams(values) {
+      if (this.worker) this.worker.postMessage({ type: "params", values: values || {} });
     }
     _resize() {
       if (!this.worker || !this.ready) return;
@@ -666,11 +671,98 @@
       updatePanels(scene);
     }
     setConfidence(message, "warn");
+    renderDemoControls(null);
     try {
       await runner.run(CLIENT_FALLBACK_CODE);
     } catch (fallbackErr) {
       /* placeholder is hand-written and can't realistically fail */
     }
+  }
+
+  /* ============================================================== */
+  /* Interactive demo parameter controls ("fill in the values")     */
+  /* ============================================================== */
+
+  function demoParams(scene) {
+    const out = {};
+    ((scene && scene.params) || []).forEach((p) => {
+      out[p.name] = p.value;
+    });
+    return out;
+  }
+
+  function fmtNum(v) {
+    return String(Math.round(v * 100) / 100);
+  }
+
+  function injectDemoStyles() {
+    if (document.getElementById("demoControlsStyle")) return;
+    const st = document.createElement("style");
+    st.id = "demoControlsStyle";
+    st.textContent =
+      ".demo-controls{margin:10px auto 0;width:92%;max-width:1100px;background:#16203a;border:1px solid #26314f;border-radius:12px;padding:12px 16px;box-sizing:border-box;}" +
+      ".demo-controls-head{font-size:12px;color:#9fb0d4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}" +
+      ".demo-params{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;}" +
+      ".demo-param{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;}" +
+      ".demo-param-name{font-size:13px;color:#cfe0ff;}" +
+      ".demo-param-val{font:600 13px 'JetBrains Mono',ui-monospace,monospace;color:#7cc4ff;min-width:3ch;text-align:right;}" +
+      ".demo-param input[type=range]{grid-column:1 / -1;width:100%;accent-color:#7cc4ff;}";
+    document.head.appendChild(st);
+  }
+
+  // Build the live slider panel for a demo scene. A non-demo scene (no params)
+  // hides the panel. Moving a slider updates the worker's `P` global live —
+  // no recompile — so the graph responds as you drag.
+  function renderDemoControls(scene) {
+    injectDemoStyles();
+    let dc = document.getElementById("demoControls");
+    if (!dc) {
+      dc = document.createElement("div");
+      dc.id = "demoControls";
+      dc.className = "demo-controls";
+      el.frame.insertAdjacentElement("afterend", dc);
+    }
+    const params = (scene && scene.params) || [];
+    if (!params.length) {
+      dc.hidden = true;
+      dc.innerHTML = "";
+      return;
+    }
+    dc.hidden = false;
+    dc.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "demo-controls-head";
+    head.textContent = "Adjust the values — the graph updates live";
+    dc.appendChild(head);
+    const grid = document.createElement("div");
+    grid.className = "demo-params";
+    dc.appendChild(grid);
+    params.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "demo-param";
+      const name = document.createElement("span");
+      name.className = "demo-param-name";
+      name.textContent = p.label || p.name;
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = p.min;
+      slider.max = p.max;
+      slider.step = p.step;
+      slider.value = p.value;
+      slider.setAttribute("aria-label", p.label || p.name);
+      const val = document.createElement("span");
+      val.className = "demo-param-val";
+      val.textContent = fmtNum(p.value);
+      slider.addEventListener("input", () => {
+        const v = parseFloat(slider.value);
+        val.textContent = fmtNum(v);
+        runner.setParams({ [p.name]: v });
+      });
+      row.appendChild(name);
+      row.appendChild(slider);
+      row.appendChild(val);
+      grid.appendChild(row);
+    });
   }
 
   async function runSceneWithRepair(scene, prompt) {
@@ -688,9 +780,10 @@
             : `Repair ${attempt}/${MAX_REPAIRS}: trying the fixed code…`,
           "pending"
         );
-        await runner.run(current.code);
+        await runner.run(current.code, demoParams(current));
         state.scene = current;
         updatePanels(current);
+        renderDemoControls(current);
         if (current.is_fallback) {
           // Server gave us a guaranteed-renderable placeholder because the real
           // generator produced blank code three times. Surface it clearly —
