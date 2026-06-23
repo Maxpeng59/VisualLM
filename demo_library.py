@@ -24,7 +24,7 @@ Every `code` follows the H API contract and is checked by validate_scene.js
 """
 from __future__ import annotations
 
-DEMO_LIBRARY: list[dict] = [
+_BASE: list[dict] = [
     {
         "id": "linear-slope-intercept",
         "area": "Algebra 1",
@@ -526,3 +526,23 @@ H.text("a = " + a.toFixed(1) + "   b = " + b.toFixed(1) + "   foci at c = " + c.
 """.strip(),
     },
 ]
+
+# Demos authored + validated by the algebra-precalc-demos workflow (one per
+# Algebra 1 / Algebra 2 / Precalculus topic), re-checked through
+# validate_scene.js so every code runs, paints on-screen, animates, and is
+# labeled. Stored as data in demo_library_generated.json and merged here. Kept
+# separate from _BASE so the hand-verified baseline is always present.
+import json as _json
+from pathlib import Path as _Path
+
+_GENERATED: list[dict] = []
+_gen_path = _Path(__file__).resolve().parent / "demo_library_generated.json"
+try:
+    _loaded = _json.loads(_gen_path.read_text(encoding="utf-8"))
+    if isinstance(_loaded, list):
+        _GENERATED = _loaded
+except (OSError, ValueError):
+    _GENERATED = []
+
+# Hand-written demos first so they win id/keyword ties over generated ones.
+DEMO_LIBRARY: list[dict] = _BASE + _GENERATED

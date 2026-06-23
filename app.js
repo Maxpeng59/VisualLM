@@ -822,6 +822,12 @@
               "Regenerate or rephrase for a better scene.",
             "warn",
           );
+        } else if (current.from_demo) {
+          // Interactive curriculum demo — drag the sliders to explore.
+          setConfidence(
+            `${current.area || "Interactive"} demo • drag the sliders to explore`,
+            "ok",
+          );
         } else if (current.from_library) {
           // Instant, hand-verified scene from the curated STEM corpus.
           setConfidence(
