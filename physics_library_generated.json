@@ -5947,5 +5947,60 @@
    }
   ],
   "code": "H.background();\nconst w = H.W, h = H.H;\nconst Vp = Math.max(1, P.Vp);         // primary rms voltage, volts\nconst Np = Math.max(1, Math.round(P.Np)); // primary turns\nconst Ns = Math.max(1, Math.round(P.Ns)); // secondary turns\nconst ratio = Ns / Np;\nconst Vs = Vp * ratio;                // ideal transformer: Vs = Vp * Ns/Np\n// AC waveforms (instantaneous), peak = rms*sqrt(2), oscillate with t -> looping\nconst f = 0.6;\nconst vp_inst = Vp * Math.SQRT2 * Math.sin(t * f * H.TAU / 1.0 * 0.5 + 0);\nconst vs_inst = Vs * Math.SQRT2 * Math.sin(t * f * H.TAU / 1.0 * 0.5 + 0);\n// Core (two vertical bars + top/bottom yokes)\nconst coreL = w * 0.40, coreR = w * 0.60, coreT = h * 0.30, coreB = h * 0.78;\nH.rect(coreL - 10, coreT - 10, 20, coreB - coreT + 20, { fill: H.colors.panel, stroke: H.colors.axis, width: 2 });\nH.rect(coreR - 10, coreT - 10, 20, coreB - coreT + 20, { fill: H.colors.panel, stroke: H.colors.axis, width: 2 });\nH.rect(coreL - 10, coreT - 10, coreR - coreL + 20, 18, { fill: H.colors.panel, stroke: H.colors.axis, width: 2 });\nH.rect(coreL - 10, coreB - 8, coreR - coreL + 20, 18, { fill: H.colors.panel, stroke: H.colors.axis, width: 2 });\n// oscillating flux brightness in core (Faraday: same Φ links both coils)\nconst fluxGlow = Math.abs(Math.sin(t * f * H.TAU * 0.5));\nH.text(\"Φ\", (coreL + coreR) / 2 - 6, coreT + 6, { color: H.hsl(45, 90, 40 + 40 * fluxGlow), size: 16, weight: 700 });\n// windings — loop COUNTS reflect the turns ratio (larger side capped at 14)\nconst Nmax = Math.max(Np, Ns);\nconst drawCap = 14;\nconst npDraw = Math.max(1, Math.round(Np / Nmax * drawCap));\nconst nsDraw = Math.max(1, Math.round(Ns / Nmax * drawCap));\nfor (let i = 0; i < npDraw; i++) {\n  const yy = coreT + 14 + i * (coreB - coreT - 28) / Math.max(1, npDraw);\n  H.circle(coreL - 10, yy, 9, { stroke: H.colors.accent, width: 2.5 });\n}\nfor (let i = 0; i < nsDraw; i++) {\n  const yy = coreT + 14 + i * (coreB - coreT - 28) / Math.max(1, nsDraw);\n  H.circle(coreR + 10, yy, 9, { stroke: H.colors.accent2, width: 2.5 });\n}\n// AC source on primary, lamp/load on secondary\nconst sx = w * 0.16, lx = w * 0.84, midY = (coreT + coreB) / 2;\nH.circle(sx, midY, 22, { stroke: H.colors.accent, width: 3 });\nH.text(\"~\", sx - 5, midY + 7, { color: H.colors.accent, size: 22, weight: 700 });\nH.arrow(sx + 22, midY - vp_inst / (Vp * Math.SQRT2) * 28, coreL - 24, midY - vp_inst / (Vp * Math.SQRT2) * 28, { color: H.colors.accent, width: 2, head: 7 });\nH.circle(lx, midY, 16, { stroke: H.colors.accent2, width: 3 });\nH.text(\"Vp\", sx - 12, midY + 44, { color: H.colors.accent, size: 13 });\nH.text(\"Vs\", lx - 12, midY + 44, { color: H.colors.accent2, size: 13 });\n// little bar gauges for instantaneous voltage — shared px/volt scale so the\n// taller side (Vp or Vs) fills ~70px and the amplitude RATIO stays visible\nconst vMaxPeak = Math.max(Vp, Vs) * Math.SQRT2;\nconst gscale = 70 / vMaxPeak;\nH.line(sx - 20, midY + 56, sx - 20 + vp_inst * gscale, midY + 56, { color: H.colors.accent, width: 5 });\nH.line(lx - 20, midY + 56, lx - 20 + vs_inst * gscale, midY + 56, { color: H.colors.accent2, width: 5 });\nconst kind = ratio > 1 ? \"step-up\" : ratio < 1 ? \"step-down\" : \"isolation (1:1)\";\nH.text(\"Transformer:  Vs / Vp = Ns / Np\", 24, 30, { color: H.colors.ink, size: 18, weight: 700 });\nH.text(\"Np = \" + Np + \"   Ns = \" + Ns + \"   ratio Ns/Np = \" + ratio.toFixed(2) + \"   (\" + kind + \")\", 24, 52, { color: H.colors.sub, size: 13 });\nH.text(\"Vp = \" + Vp.toFixed(1) + \" V  →  Vs = \" + Vs.toFixed(1) + \" V    (v_s now = \" + vs_inst.toFixed(1) + \" V)\", 24, h - 22, { color: H.colors.good, size: 14 });\nH.legend([{ label: \"primary\", color: H.colors.accent }, { label: \"secondary\", color: H.colors.accent2 }], w - 170, 28);"
+ },
+ {
+  "id": "ph-standing-waves-pipes-strings",
+  "area": "Physics",
+  "topic": "Standing waves in pipes and strings",
+  "title": "Standing waves: f_n = n v / (2L)",
+  "equation": "f_n = n v / (2L),  lambda_n = 2L / n",
+  "keywords": [
+   "standing wave",
+   "string",
+   "pipe",
+   "harmonic",
+   "overtone",
+   "node",
+   "antinode",
+   "fundamental frequency",
+   "resonance",
+   "f = n v / 2L",
+   "wavelength",
+   "musical instrument",
+   "modes"
+  ],
+  "explanation": "A string fixed at both ends can only vibrate in whole-number patterns called harmonics: the nth harmonic fits exactly n half-wavelengths between the ends. Slide n to step through the modes and watch the nodes (fixed points, where the string never moves) multiply. The length L and wave speed v set the frequency f_n = n v / (2L) — longer or heavier strings (slower v) sound lower, which is exactly how instruments are tuned.",
+  "bullets": [
+   "Only whole-number harmonics fit: the nth mode has n half-wavelengths and n+1 nodes.",
+   "lambda_n = 2L/n, so f_n = n v / (2L) — the frequencies are integer multiples of the fundamental.",
+   "Shorter L or higher wave speed v raises the pitch; this is how strings and pipes are tuned."
+  ],
+  "params": [
+   {
+    "name": "n",
+    "label": "harmonic  n",
+    "min": 1,
+    "max": 6,
+    "step": 1,
+    "value": 3
+   },
+   {
+    "name": "L",
+    "label": "length  L (m)",
+    "min": 2,
+    "max": 8,
+    "step": 0.5,
+    "value": 6
+   },
+   {
+    "name": "v",
+    "label": "wave speed  v (m/s)",
+    "min": 1,
+    "max": 10,
+    "step": 0.5,
+    "value": 4
+   }
+  ],
+  "code": "H.background();\nconst v = H.plot2d({ xMin: 0, xMax: 10, yMin: -2.6, yMax: 2.6 });\nv.grid(); v.axes();\nconst n = Math.max(1, Math.round(P.n));         // harmonic number\nconst L = Math.max(1, P.L);                       // string length (m)\nconst speed = Math.max(0.1, P.v);                 // wave speed (m/s)\nconst wavelength = 2 * L / n;                     // lambda_n = 2L/n\nconst freq = speed / wavelength;                  // f_n = n v / (2L)\nconst k = n * Math.PI / L;                        // sin(kx), node spacing L/n\nconst A = 2;\n// y(x,t) = A sin(kx) cos(wt); a gentle VISUAL rate so the pattern breathes\nconst osc = Math.cos(t * 2.2);\nconst pts = [];\nfor (let i = 0; i <= 120; i++) { const x = L * i / 120; pts.push([x, A * Math.sin(k * x) * osc]); }\nv.path(pts, { color: H.colors.accent, width: 3 });\n// the two envelopes the string oscillates between (dashed)\nconst eup = [], edn = [];\nfor (let i = 0; i <= 120; i++) { const x = L * i / 120; const y = A * Math.sin(k * x); eup.push([x, y]); edn.push([x, -y]); }\nv.path(eup, { color: H.colors.sub, width: 1, dash: [4, 4] });\nv.path(edn, { color: H.colors.sub, width: 1, dash: [4, 4] });\n// nodes (fixed points where sin(kx)=0): x = m L / n\nfor (let m = 0; m <= n; m++) v.dot(m * L / n, 0, { r: 5, fill: H.colors.warn });\n// fixed ends of the string\nv.line(0, -A, 0, A, { color: H.colors.violet, width: 3 });\nv.line(L, -A, L, A, { color: H.colors.violet, width: 3 });\nH.text(\"Standing wave on a string (fixed ends)\", 24, 30, { color: H.colors.ink, size: 18, weight: 700 });\nH.text(\"n = \" + n + \"   L = \" + L.toFixed(1) + \" m   lambda = \" + wavelength.toFixed(2) + \" m   f = \" + freq.toFixed(2) + \" Hz   (\" + (n + 1) + \" nodes)\", 24, 52, { color: H.colors.sub, size: 12 });\nH.legend([{ label: \"string\", color: H.colors.accent }, { label: \"nodes\", color: H.colors.warn }, { label: \"fixed end\", color: H.colors.violet }], H.W - 170, 28);"
  }
 ]
