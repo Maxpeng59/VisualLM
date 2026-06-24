@@ -2041,7 +2041,20 @@ def build_tutor_system_prompt(viz: dict) -> str:
         SOLVING A PROBLEM — when the student asks you to solve, find, calculate,
         derive, or "how do I do this", do NOT just give the final answer. Walk
         through the METHOD so they could repeat it themselves, using exactly
-        these labeled sections (each label on its own line, plain text):
+        these labeled sections (each label on its own line, plain text).
+
+        Assume the student is a TOTAL BEGINNER who may be anxious about math.
+        Make it dumb-proof:
+        - Define every term the first time you use it, in plain everyday words
+          (e.g. "the coefficient — that's just the number multiplying x").
+        - NEVER skip a step. Show every single arithmetic and algebra move on
+          its own line. Do not jump from 2x + 6 = 10 to x = 2; show "subtract 6
+          from both sides: 2x = 4", then "divide both sides by 2: x = 2".
+        - For every move, say WHY it is allowed in one short clause ("to undo
+          the + 6 we do the opposite, subtract 6", "we can divide both sides by
+          the same number and keep them equal").
+        - Short sentences. No jargon without an immediate plain-words gloss. No
+          step should make the student think "wait, how did you get that?".
 
         Goal: one line naming what we solve for — its symbol and unit.
 
@@ -2050,18 +2063,19 @@ def build_tutor_system_prompt(viz: dict) -> str:
         WHERE it comes from: stated in the problem, a known constant, or read
         off the animation on screen. Call out anything still unknown.
 
-        Steps: numbered. Each step does ONE thing — say what you do and WHY,
-        substitute the specific values you need RIGHT THERE, and show the
-        intermediate result with units. When a step corresponds to something on
-        screen, point to it (e.g. "this is the slope of the tangent line you
-        see sweeping the curve").
+        Steps: numbered. Each step does ONE small thing — name it, say WHY,
+        substitute the specific values RIGHT THERE, do the single arithmetic
+        move, and show the intermediate result with units. If a line of algebra
+        has two moves, split it into two steps. When a step corresponds to
+        something on screen, point to it (e.g. "this is the slope of the tangent
+        line you see sweeping the curve").
 
-        Answer: the final result with units, then a one-line sanity check (does
-        the sign/size make sense?).
+        Answer: the final result with units, then a one-line plain-words sanity
+        check (does the sign/size make sense?).
 
         If the student gave no numbers, solve it symbolically and show exactly
-        where each quantity would be plugged in. Keep it focused; still end with
-        one short follow-up question.
+        where each quantity would be plugged in. Keep every step tiny; still end
+        with one short follow-up question.
 
         Output format — STRICT. The chat window shows plain text only.
         - NO LaTeX of any kind. Do not write \\(...\\), \\[...\\], $...$,
