@@ -155,6 +155,23 @@ binds `0.0.0.0` automatically when it's set.
    strangers can't burn your API credits. Per-IP rate limiting is on by
    default (`VISUALLM_RATE_LIMIT`, 10/min via render.yaml).
 
+It works with **no API key** — all curriculum demos and STEM library scenes are
+served from the bundled libraries (no model calls), so the site is fully useful
+out of the box. A key only enables free-form "type any idea" generation.
+
+### Custom domain (e.g. www.VisualLM.com)
+
+The app is origin-agnostic (all requests are relative paths), so a custom domain
+needs only DNS — no code changes:
+
+1. Own the domain (buy `VisualLM.com` from any registrar if you don't).
+2. In your Render service → **Settings → Custom Domains** → add `www.visuallm.com`
+   (and `visuallm.com`). Render shows the exact DNS records to create.
+3. At your registrar's DNS panel, add what Render gives you — typically:
+   - `www`  → **CNAME** → `your-app.onrender.com`
+   - root `@` → Render's **A record** (or an ALIAS/ANAME → `your-app.onrender.com`)
+4. Wait for DNS to propagate (minutes–hours); Render auto-provisions free HTTPS.
+
 ### Any other Docker host (Fly.io, Railway, Cloud Run, a VPS…)
 
 ```bash
