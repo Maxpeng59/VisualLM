@@ -58,6 +58,7 @@ let sceneFn = null;
 let running = false;
 let paused = false;
 let speed = 1;
+let suspended = false; // true when the tab is hidden — stop drawing to save CPU
 
 // User-driven camera orbit, applied on top of whatever yaw/pitch the scene
 // sets. Updated by "orbit" messages from the main thread (canvas drag/wheel),
@@ -982,7 +983,17 @@ function tick() {
     post({ type: "heartbeat", frame: frameCount, t: simTime });
   }
 
-  loopTimer = setTimeout(tick, FRAME_MS);
+  // Suspended (tab hidden): stop the loop entirely instead of redrawing into a
+  // canvas nobody can see. The "visible" message restarts it.
+  if (suspended) {
+    loopTimer = null;
+    return;
+  }
+  // Self-correcting schedule: aim for a fixed ~16.7ms PERIOD, not 16.7ms AFTER
+  // the work. Without this, a scene that takes 10ms to draw runs at ~37fps
+  // (10 + 16.7) instead of 60. Subtract the time this frame already spent.
+  const work = performance.now() - now;
+  loopTimer = setTimeout(tick, Math.max(0, FRAME_MS - work));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1060,6 +1071,16 @@ self.onmessage = (e) => {
       break;
     case "speed":
       speed = m.value;
+      break;
+    case "visible":
+      // Tab visibility from the main thread. Hidden -> stop the loop (don't
+      // redraw an invisible canvas). Visible -> restart, resetting the wall
+      // clock so the paused gap doesn't jump simTime forward.
+      suspended = !m.value;
+      if (!suspended && running && !loopTimer) {
+        lastWall = performance.now();
+        tick();
+      }
       break;
     case "params":
       // Live demo-parameter update from the UI sliders. Mutate in place so the

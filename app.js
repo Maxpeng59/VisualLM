@@ -272,6 +272,15 @@
         });
       });
       this._wireOrbit();
+
+      // Stop rendering while the tab is hidden — no point animating a canvas
+      // nobody can see, and it frees the CPU/battery. Don't suspend mid-load
+      // (a pending run relies on the worker's heartbeat to settle).
+      document.addEventListener("visibilitychange", () => {
+        if (!this.worker) return;
+        if (document.hidden && this.pending && !this.pending.settled) return;
+        this.worker.postMessage({ type: "visible", value: !document.hidden });
+      });
     }
 
     /* Drag-to-orbit + scroll-to-zoom + double-click-to-reset for 3D scenes.
@@ -345,7 +354,10 @@
       return {
         width: Math.max(320, Math.round(rect.width)),
         height: Math.max(240, Math.round(rect.height)),
-        dpr: Math.min(2, window.devicePixelRatio || 1),
+        // Cap at 1.5 rather than 2: on a Retina display dpr=2 means 4x the
+        // pixels to fill every frame, which dominates the cost of fill-heavy
+        // 3D scenes. 1.5 still looks crisp and roughly halves the fill work.
+        dpr: Math.min(1.5, window.devicePixelRatio || 1),
       };
     }
 
@@ -360,7 +372,7 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=17");
+      const worker = new Worker("./sandbox-worker.js?v=23");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();

@@ -522,11 +522,13 @@ textarea:focus, input[type="text"]:focus {
   width: fit-content;
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(10,10,10,0.72);
+  /* No backdrop-filter: blur — it sits over the animating canvas, so the
+     browser would recompute the blur every frame (a real perf cost). A solid,
+     slightly-more-opaque pill reads just as well and costs nothing per frame. */
+  background: rgba(8,10,18,0.85);
   border: 1px solid var(--border);
   font-size: 12px;
   color: var(--muted);
-  backdrop-filter: blur(8px);
 }
 #sceneTag { color: var(--info); font-weight: 500; }
 .orbit-hint {
@@ -537,11 +539,10 @@ textarea:focus, input[type="text"]:focus {
   pointer-events: none;
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(10,10,10,0.62);
+  background: rgba(8,10,18,0.82); /* solid pill; no per-frame backdrop blur */
   border: 1px solid var(--border);
   font-size: 11px;
   color: var(--muted);
-  backdrop-filter: blur(8px);
 }
 /* The canvas is now an orbit control surface for 3D scenes. */
 .canvas-frame { cursor: grab; touch-action: none; }
