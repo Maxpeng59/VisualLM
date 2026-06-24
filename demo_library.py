@@ -535,14 +535,17 @@ H.text("a = " + a.toFixed(1) + "   b = " + b.toFixed(1) + "   foci at c = " + c.
 import json as _json
 from pathlib import Path as _Path
 
-_GENERATED: list[dict] = []
-_gen_path = _Path(__file__).resolve().parent / "demo_library_generated.json"
-try:
-    _loaded = _json.loads(_gen_path.read_text(encoding="utf-8"))
-    if isinstance(_loaded, list):
-        _GENERATED = _loaded
-except (OSError, ValueError):
-    _GENERATED = []
+def _load_generated(filename: str) -> list[dict]:
+    try:
+        data = _json.loads((_Path(__file__).resolve().parent / filename).read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+# Generated curriculum demos: math (Algebra 1 → Precalculus) + physics.
+_GENERATED: list[dict] = _load_generated("demo_library_generated.json")
+_PHYSICS: list[dict] = _load_generated("physics_library_generated.json")
 
 # Hand-written demos first so they win id/keyword ties over generated ones.
-DEMO_LIBRARY: list[dict] = _BASE + _GENERATED
+DEMO_LIBRARY: list[dict] = _BASE + _GENERATED + _PHYSICS
