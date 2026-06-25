@@ -1,0 +1,831 @@
+/* ============================================================== */
+/* Reset + theme tokens                                           */
+/* ============================================================== */
+
+* { box-sizing: border-box; }
+
+:root {
+  /* Dark theme is the default. The user can flip to light with the toggle
+   * in the topbar; the choice is persisted in localStorage. */
+  --bg:        #0a0a0a;
+  --bg-2:      #0f0f10;
+  --panel:     #141416;
+  --panel-2:   #1a1a1d;
+  --panel-3:   #202024;
+  --border:    #26262b;
+  --border-2:  #2f2f36;
+  --hover:     #25252a;
+  --text:      #f4f4f5;
+  --muted:     #a1a1aa;
+  --subtle:    #71717a;
+  --faint:     #52525b;
+  --accent:    #e4e4e7;
+  --accent-2:  #fafafa;
+  --primary-bg:   var(--accent-2);  /* primary button background */
+  --primary-fg:   #0a0a0a;          /* primary button text */
+  --good:      #86efac;
+  --warn:      #fca5a5;
+  --info:      #93c5fd;
+  --chat-user-bg:      var(--panel-3);
+  --chat-assistant-bg: var(--panel-2);
+  --scrollbar:       #2a2a2e;
+  --scrollbar-hover: #34343a;
+  --radius:    10px;
+  --radius-lg: 14px;
+  --shadow:    0 1px 0 rgba(255,255,255,0.02), 0 8px 24px rgba(0,0,0,0.4);
+}
+
+[data-theme="light"] {
+  --bg:        #fafafa;
+  --bg-2:      #ffffff;
+  --panel:     #ffffff;
+  --panel-2:   #f5f5f7;
+  --panel-3:   #e9e9ee;
+  --border:    #e2e2e8;
+  --border-2:  #cbcbd3;
+  --hover:     #efeff3;
+  --text:      #18181b;
+  --muted:     #52525b;
+  --subtle:    #71717a;
+  --faint:     #a1a1aa;
+  --accent:    #18181b;
+  --accent-2:  #18181b;
+  --primary-bg:   #18181b;
+  --primary-fg:   #fafafa;
+  --good:      #16a34a;
+  --warn:      #dc2626;
+  --info:      #2563eb;
+  --chat-user-bg:      #eef0f5;
+  --chat-assistant-bg: #f5f5f7;
+  --scrollbar:       #d4d4d8;
+  --scrollbar-hover: #a1a1aa;
+  --shadow:    0 1px 0 rgba(0,0,0,0.02), 0 8px 24px rgba(0,0,0,0.08);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+p { margin: 0; }
+
+code, .meta-cell code {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+button { font-family: inherit; }
+
+textarea, input[type="text"] {
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  outline: none;
+  resize: vertical;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.55;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+textarea:focus, input[type="text"]:focus {
+  border-color: var(--border-2);
+  background: var(--panel);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); border: 0;
+}
+
+/* ============================================================== */
+/* Top bar                                                        */
+/* ============================================================== */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 22px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.brand-mark {
+  color: var(--good);
+  font-size: 11px;
+  line-height: 1;
+}
+.brand-name {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.status-pill.ok    { color: var(--good); border-color: rgba(134,239,172,0.25); }
+.status-pill.error { color: var(--warn); border-color: rgba(252,165,165,0.25); }
+.status-pill.pending { color: var(--info); border-color: rgba(147,197,253,0.25); }
+
+/* ============================================================== */
+/* Workspace grid: left tabs | center canvas | right prompt        */
+/* ============================================================== */
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(260px, 340px);
+  gap: 14px;
+  padding: 14px 16px;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Common heading inside any panel */
+.panel-header {
+  padding: 16px 18px 4px;
+}
+.panel-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.panel-header p {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+/* ============================================================== */
+/* LEFT PANEL — tabs                                              */
+/* ============================================================== */
+
+.left-panel {
+  overflow: hidden;
+}
+
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  padding: 0 8px;
+  gap: 2px;
+}
+.tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 12px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.tab-count {
+  background: var(--panel-3);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tab-panel {
+  padding: 18px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.tab-panel[hidden] { display: none; }
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--subtle);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.section-body {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.meta-cell {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.meta-cell-wide { grid-column: span 2; }
+.meta-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtle);
+}
+.meta-cell strong {
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-cell code {
+  color: var(--info);
+  background: transparent;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bullet-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.bullet-list li {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Examples tab */
+.playback-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.slider-block { display: flex; flex-direction: column; gap: 4px; }
+.slider-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+.slider-head label { letter-spacing: 0.06em; text-transform: uppercase; }
+#speedSlider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+#speedSlider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--border-2);
+  border-radius: 999px;
+}
+#speedSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 14px; width: 14px; border-radius: 50%;
+  background: var(--accent);
+  margin-top: -5px;
+  cursor: pointer;
+}
+
+.chip-grid {
+  display: grid;
+  gap: 6px;
+}
+.chip {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.chip:hover { background: var(--hover); border-color: var(--border-2); }
+.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* Resources tab */
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 16px;
+  border: 1.5px dashed var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--panel-2);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--accent);
+  background: var(--panel-3);
+}
+.drop-zone strong { color: var(--text); font-size: 13.5px; }
+.drop-zone span { color: var(--subtle); font-size: 12px; }
+.drop-zone input[type="file"] { display: none; }
+
+.resource-list {
+  display: grid;
+  gap: 6px;
+}
+.resource-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+/* The first grid cell needs min-width:0 so its contents (the long filename)
+ * can shrink — grid items default to min-content width and would push
+ * past the cell boundary, breaking the ellipsis. */
+.resource-item > div {
+  min-width: 0;
+}
+.resource-item strong {
+  /* text-overflow: ellipsis requires a block/inline-block context — <strong>
+   * is inline by default, so without `display: block` the truncation never
+   * kicked in and long filenames spilled across the layout. */
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-item .resource-meta {
+  display: block;
+  font-size: 11.5px;
+  color: var(--subtle);
+}
+.resource-delete {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.resource-delete:hover { color: var(--warn); border-color: rgba(252,165,165,0.4); }
+
+.resource-empty {
+  color: var(--subtle);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 6px 0;
+}
+
+/* ============================================================== */
+/* CENTER — stage / canvas                                        */
+/* ============================================================== */
+
+.stage-panel {
+  padding: 14px;
+  background: var(--panel);
+  min-height: 70vh;
+}
+
+.canvas-frame {
+  position: relative;
+  flex: 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #050507;
+  border: 1px solid var(--border);
+  min-height: 520px;
+  display: flex;
+}
+
+.canvas-frame canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-overlay {
+  position: absolute;
+  /* Bottom-left, NOT top-left: generated scenes put their title at the
+   * top-left (the system prompt tells them to), and the status pills were
+   * covering it on every single scene. */
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 2;
+}
+.canvas-overlay span {
+  display: inline-flex;
+  width: fit-content;
+  padding: 5px 10px;
+  border-radius: 999px;
+  /* No backdrop-filter: blur — it sits over the animating canvas, so the
+     browser would recompute the blur every frame (a real perf cost). A solid,
+     slightly-more-opaque pill reads just as well and costs nothing per frame. */
+  background: rgba(8,10,18,0.85);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+#sceneTag { color: var(--info); font-weight: 500; }
+.orbit-hint {
+  position: absolute;
+  bottom: 12px;
+  right: 14px;
+  z-index: 2;
+  pointer-events: none;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(8,10,18,0.82); /* solid pill; no per-frame backdrop blur */
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+/* The canvas is now an orbit control surface for 3D scenes. */
+.canvas-frame { cursor: grab; touch-action: none; }
+.canvas-frame:active { cursor: grabbing; }
+#sceneConfidence[data-tone="pending"] { color: var(--info); }
+#sceneConfidence[data-tone="ok"]      { color: var(--good); }
+#sceneConfidence[data-tone="warn"]    { color: var(--warn); }
+
+/* ============================================================== */
+/* RIGHT — prompt                                                 */
+/* ============================================================== */
+
+.right-panel {
+  padding: 18px;
+  gap: 14px;
+  display: flex;
+  flex-direction: column;
+}
+.right-panel .panel-header { padding: 0; }
+.right-panel textarea#promptInput {
+  min-height: 160px;
+  font-size: 13.5px;
+}
+
+.mode-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mode-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--subtle);
+}
+.segmented-control {
+  display: inline-flex;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.mode-button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.mode-button:hover { color: var(--text); }
+.mode-button.active {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.composer-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.action-button {
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.action-button:hover { background: var(--hover); }
+.action-button:active { transform: translateY(1px); }
+.action-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.action-button.primary {
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+  border-color: var(--primary-bg);
+  font-weight: 600;
+}
+.action-button.primary:hover { filter: brightness(1.08); }
+
+.ghost-button {
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.ghost-button:hover { background: var(--hover); }
+
+.prompt-foot .hint {
+  color: var(--subtle);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+/* ============================================================== */
+/* Tutor                                                          */
+/* ============================================================== */
+
+.tutor-panel {
+  margin: 0 16px 16px;
+  padding: 18px;
+  gap: 14px;
+}
+
+.tutor-header h2 {
+  font-size: 15px;
+}
+.tutor-header p {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-top: 3px;
+}
+
+.tutor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 320px);
+  gap: 16px;
+  align-items: start;
+}
+
+.chat-column {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-messages {
+  min-height: 220px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.chat-message {
+  display: grid;
+  gap: 4px;
+  max-width: 88%;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.chat-message.assistant { justify-self: start; background: var(--chat-assistant-bg); }
+.chat-message.user      { justify-self: end;   background: var(--chat-user-bg); }
+.chat-message.pending   { opacity: 0.7; }
+
+.chat-role {
+  color: var(--subtle);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.chat-body {
+  color: var(--text);
+  line-height: 1.6;
+  font-size: 13.5px;
+  word-wrap: break-word;
+}
+.chat-body strong { color: var(--text); font-weight: 600; }
+.chat-body em { font-style: italic; color: var(--muted); }
+.chat-body code {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.chat-body ol,
+.chat-body ul {
+  margin: 8px 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 4px;
+}
+.chat-body li {
+  line-height: 1.55;
+}
+.chat-body ol > li::marker {
+  color: var(--subtle);
+  font-weight: 500;
+}
+/* Collapse "\n\n" in chat text (rendered as <br><br>) to a single break.
+ * `content` only works on pseudo-elements, so the previous rule was inert. */
+.chat-body br + br { display: none; }
+
+.chat-composer { display: grid; gap: 10px; }
+#chatInput { min-height: 90px; }
+.chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chat-hint { color: var(--subtle); font-size: 11.5px; }
+
+.chat-sidebar {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+.suggestion-list { display: grid; gap: 6px; }
+.suggestion-chip {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  padding: 9px 11px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.suggestion-chip:hover { background: var(--hover); border-color: var(--border-2); }
+/* The step-by-step solver: stands out as the primary tutor action. */
+.suggestion-chip.solve {
+  border-color: var(--info);
+  color: var(--info);
+  font-weight: 600;
+}
+.suggestion-chip.solve::before { content: "→ "; opacity: 0.8; }
+.suggestion-chip.solve:hover { background: color-mix(in srgb, var(--info) 12%, transparent); }
+
+/* ============================================================== */
+/* Responsive                                                     */
+/* ============================================================== */
+
+@media (max-width: 900px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .stage-panel { min-height: 50vh; }
+  .tutor-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================== */
+/* Theme toggle (sun/moon button in the topbar)                   */
+/* ============================================================== */
+
+.theme-toggle {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-2);
+  background: var(--hover);
+}
+/* The icon shows what theme you'll SWITCH TO (action-oriented).
+ * Dark theme active → show a sun (click to go light).
+ * Light theme active → show a moon (click to go dark). */
+.theme-toggle::before { content: "☀"; }
+[data-theme="light"] .theme-toggle::before { content: "☾"; }

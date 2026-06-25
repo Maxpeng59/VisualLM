@@ -5,6 +5,30 @@ or 3D explanation**. Instead of picking from a handful of fixed demos, the AI
 *writes the animation itself* — generating JavaScript that runs in a locked-down
 sandbox in your browser — so it can visualize essentially any topic.
 
+## Two editions
+
+VisualLM ships in two flavors of the same project:
+
+| | **Browser edition** (`web/`) | **Desktop / server edition** (repo root) |
+|---|---|---|
+| Runs | 100% in the browser — **no server, no install, no API key** | Local Python server (or packaged desktop app) |
+| Host | **GitHub Pages** (static) — instant, free, shareable link | Your machine, or any server host (Render, etc.) |
+| Chemistry: 3D molecules + equation balancing | ✅ | ✅ |
+| 333 interactive curriculum demos + 50 curated scenes | ✅ | ✅ |
+| Free-form AI generation (type *any* idea) | ❌ (needs a model + key) | ✅ (Claude ▸ ChatGPT ▸ Gemini ▸ Ollama) |
+| AI tutor chat | ❌ | ✅ |
+
+The browser edition is a faithful client-side port: the chemistry engine and the
+demo/scene matcher are reimplemented in JavaScript (`web/js/`) with **verified
+parity** against the Python — same molecules, same exact-integer balancing, same
+scene routing. It's the fastest way to share VisualLM (just a link); the desktop
+edition adds the open-ended AI generation that needs server-side keys.
+
+- **Browser edition (live):** https://maxpeng59.github.io/VisualLM/
+- **Desktop app:** `python3 launch.py` (browser app-window) or `python3 desktop.py`
+  (native window), or build a standalone app with `./build_app.sh`.
+- **Server deploy (full app):** see [Deploy](#deploy) below (Render blueprint).
+
 ## How it works
 
 ```

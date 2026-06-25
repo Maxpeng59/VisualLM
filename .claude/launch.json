@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["main.py"],
       "port": 4173
+    },
+    {
+      "name": "visuallm-web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4179", "--directory", "web"],
+      "port": 4179
     }
   ]
 }
