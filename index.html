@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <!--
+      Browser edition CSP. Everything runs client-side from same-origin files:
+        - script-src 'self' 'unsafe-inline' — the JS modules + the theme bootstrap.
+        - connect-src 'self' — fetch()s the data/*.json bundles from this origin
+          (the /api/* fetches are intercepted in-page by browser-backend.js and
+          never hit the network).
+        - worker-src 'self' — the sandbox worker. img-src data: for canvas.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; worker-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" />
+    <title>VisualLM — Browser Edition</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=13" />
+    <script>
+      // Apply the saved theme BEFORE the page paints, so there's no flash of
+      // the wrong palette. Default to dark.
+      (function () {
+        try {
+          var t = localStorage.getItem("visuallm-theme") || "dark";
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          /* localStorage unavailable */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">●</span>
+        <span class="brand-name">VisualLM</span>
+      </div>
+      <div class="topbar-status">
+        <span id="ollamaStatusBadge" class="status-pill pending">Checking…</span>
+        <span id="ollamaModelLabel" class="topbar-meta">Detecting…</span>
+        <button
+          id="themeToggle"
+          class="theme-toggle"
+          type="button"
+          aria-label="Toggle light or dark theme"
+          title="Toggle light / dark theme"
+        ></button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- LEFT: tabbed control panel -->
+      <aside class="panel left-panel">
+        <nav class="tab-bar" role="tablist" aria-label="Control panel sections">
+          <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="explanation">
+            Explanation
+          </button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="examples">
+            Examples &amp; Playback
+          </button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-tab="resources">
+            Resources
+            <span class="tab-count" id="resourceCount" hidden>0</span>
+          </button>
+        </nav>
+
+        <!-- Tab 1: Explanation -->
+        <section class="tab-panel active" data-panel="explanation" role="tabpanel">
+          <div class="meta-grid">
+            <div class="meta-cell">
+              <span class="meta-label">Concept</span>
+              <strong id="detectedTopic">Waiting…</strong>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">Scene</span>
+              <strong id="detectedDimension">Auto</strong>
+            </div>
+            <div class="meta-cell meta-cell-wide">
+              <span class="meta-label">Equation / rule</span>
+              <code id="detectedEquation">—</code>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">What you're seeing</h3>
+            <p id="sceneSummary" class="section-body">
+              Browser edition — runs entirely in your browser, no server. Type a
+              chemical formula (CH4, C6H6, glucose) for a 3D structure, a reaction
+              (2H2 + O2 → 2H2O) to balance it, or a curriculum topic for an
+              interactive demo. Then press Visualize.
+            </p>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">Key points</h3>
+            <ul id="explanationList" class="bullet-list">
+              <li>Chemistry: formulas render as 3D ball-and-stick molecules.</li>
+              <li>Reactions are balanced exactly (atoms conserved).</li>
+              <li>333 interactive demos + 50 curated scenes, all offline.</li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- Tab 2: Examples + Playback -->
+        <section class="tab-panel" data-panel="examples" role="tabpanel" hidden>
+          <div class="panel-section">
+            <h3 class="section-title">Playback</h3>
+            <div class="playback-row">
+              <button id="playPauseButton" type="button" class="ghost-button">Pause</button>
+              <div class="slider-block">
+                <div class="slider-head">
+                  <label for="speedSlider">Speed</label>
+                  <span id="speedValue">1.0×</span>
+                </div>
+                <input id="speedSlider" type="range" min="0.4" max="2.5" step="0.1" value="1" />
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <h3 class="section-title">Try an example</h3>
+            <div class="chip-grid">
+              <button type="button" class="chip" data-prompt="C6H6">Benzene (C₆H₆) — 3D</button>
+              <button type="button" class="chip" data-prompt="CH4">Methane (CH₄) — 3D</button>
+              <button type="button" class="chip" data-prompt="glucose">Glucose — 3D</button>
+              <button type="button" class="chip" data-prompt="C3H8 + O2 -> CO2 + H2O">Balance: propane combustion</button>
+              <button type="button" class="chip" data-prompt="2H2 + O2 -> 2H2O">Balance: water synthesis</button>
+              <button type="button" class="chip" data-prompt="SF6">Sulfur hexafluoride (SF₆)</button>
+              <button type="button" class="chip" data-prompt="quadratic vertex form">Quadratic vertex (demo)</button>
+              <button type="button" class="chip" data-prompt="projectile motion">Projectile motion (demo)</button>
+              <button type="button" class="chip" data-prompt="sine wave amplitude period">Sine wave (demo)</button>
+              <button type="button" class="chip" data-prompt="unit circle">Unit circle (demo)</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab 3: Resources -->
+        <section class="tab-panel" data-panel="resources" role="tabpanel" hidden>
+          <div class="panel-section">
+            <h3 class="section-title">Reference material</h3>
+            <p class="section-body">
+              Note: in the browser edition, uploaded files are kept locally but
+              are <strong>inert</strong> — the AI that reads them for context runs
+              in the desktop app. Chemistry, balancing, and the demos don't need
+              uploads.
+            </p>
+          </div>
+
+          <label class="drop-zone" id="dropZone">
+            <input id="resourceFileInput" type="file" multiple
+              accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
+            <strong>Drop files here or click to upload</strong>
+            <span>Text-based files only — kept in this browser session.</span>
+          </label>
+
+          <div class="resource-list" id="resourceList" hidden></div>
+          <p class="resource-empty" id="resourceEmpty">
+            No resources yet.
+          </p>
+        </section>
+      </aside>
+
+      <!-- CENTER: visualization stage -->
+      <section class="panel stage-panel">
+        <div class="canvas-frame">
+          <div class="canvas-overlay">
+            <span id="sceneTag">Browser Edition</span>
+            <span id="sceneConfidence" role="status" aria-live="polite" aria-atomic="true">Idle — type a formula, a reaction, or a topic.</span>
+          </div>
+          <span id="orbitHint" class="orbit-hint" hidden>drag to orbit · scroll to zoom · double-click to reset</span>
+        </div>
+      </section>
+
+      <!-- RIGHT: prompt -->
+      <aside class="panel right-panel">
+        <div class="panel-header">
+          <h2>Prompt</h2>
+          <p>A formula, a reaction, or a topic.</p>
+        </div>
+
+        <label class="sr-only" for="promptInput">Prompt</label>
+        <textarea id="promptInput" spellcheck="false" rows="6">C6H6</textarea>
+
+        <div class="mode-picker">
+          <span class="mode-label">Prefer</span>
+          <div class="segmented-control" role="radiogroup" aria-label="Scene mode">
+            <button class="mode-button active" type="button" role="radio" aria-checked="true" data-mode="auto">Auto</button>
+            <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="2d">2D</button>
+            <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="3d">3D</button>
+          </div>
+        </div>
+
+        <div class="composer-actions">
+          <button id="visualizeButton" type="button" class="action-button primary">Visualize</button>
+          <button id="randomButton" type="button" class="action-button secondary">Surprise me</button>
+        </div>
+
+        <div class="prompt-foot">
+          <p class="hint">Cmd/Ctrl + Enter to run. The sandbox renders in the center.</p>
+        </div>
+      </aside>
+    </main>
+
+    <!-- BOTTOM: tutor -->
+    <section class="panel tutor-panel">
+      <div class="tutor-header">
+        <h2>AI Tutor</h2>
+        <p>The AI tutor runs in the desktop app. In the browser, ask away and it'll point you to what works offline.</p>
+      </div>
+
+      <div class="tutor-grid">
+        <div class="chat-column">
+          <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+          <form id="chatForm" class="chat-composer">
+            <label class="sr-only" for="chatInput">Ask the tutor</label>
+            <textarea id="chatInput" spellcheck="true"
+              placeholder="The AI tutor lives in the desktop app — try a formula, reaction, or topic above."></textarea>
+            <div class="chat-actions">
+              <p id="chatHint" class="chat-hint">Browser edition: full AI tutoring is in the desktop app.</p>
+              <button id="sendChatButton" type="submit" class="action-button primary">Ask</button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="chat-sidebar">
+          <h3 class="section-title">Quick questions</h3>
+          <div id="chatSuggestions" class="suggestion-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Browser-edition logic: load BEFORE app.js so the fetch shim is in place. -->
+    <script src="./js/chemistry.js?v=2"></script>
+    <script src="./js/matching.js?v=1"></script>
+    <script src="./js/planner.js?v=1"></script>
+    <script src="./js/browser-backend.js?v=1"></script>
+    <script src="./app.js?v=br1"></script>
+  </body>
+</html>
