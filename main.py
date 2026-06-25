@@ -1713,6 +1713,15 @@ try:
 except Exception:  # noqa: BLE001 — optional; never block startup
     DEMO_LIBRARY = []
 
+# Chemistry: a chemical formula renders a 3D molecular structure; a reaction is
+# balanced and shown as reactants -> products with conservation. Known-correct
+# (parsed/computed server-side), so it short-circuits like the demo/library path.
+try:
+    from chemistry import chemistry_scene as _chemistry_scene  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    def _chemistry_scene(_prompt):  # type: ignore
+        return None
+
 _scene_cache_lock = threading.Lock()
 _scene_cache: dict[tuple, dict] = {}
 _SCENE_CACHE_MAX = 256
@@ -1865,6 +1874,28 @@ def _demo_scene(demo: dict, prompt: str) -> dict:
     }
 
 
+def _chemistry_response(sc: dict, prompt: str) -> dict:
+    """Shape a chemistry scene-content dict into a full scene response. `code`
+    is sanitized here (mirrors _demo_scene / _library_scene)."""
+    summary = sc.get("summary", "")
+    return {
+        "title": sc.get("title", "Chemistry"),
+        "tag": sc.get("tag", "Chemistry"),
+        "dimension": "3D" if str(sc.get("dimension", "")).lower().startswith("3") else "2D",
+        "equation": sc.get("equation", ""),
+        "summary": summary,
+        "bullets": [str(b) for b in sc.get("bullets", [])][:4],
+        "student_prompts": [str(p) for p in sc.get("student_prompts", [])][:4],
+        "code": sanitize_code(sc.get("code", "")),
+        "explanation": summary,
+        "model": "chemistry",
+        "engine": "chemistry",
+        "prompt": prompt,
+        "from_chemistry": True,
+        "chem_kind": sc.get("kind", ""),
+    }
+
+
 # Demo fires on a clear topic hit (a couple of keyword/title matches). Below
 # this, fall through to the scene library / generative path.
 _DEMO_THRESHOLD = 2.0
@@ -1876,6 +1907,17 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     if cached:
         cached["cached"] = True
         return cached
+
+    # 1.4 Chemistry — a chemical formula renders a 3D molecular structure; a
+    #     reaction is balanced and shown as reactants -> products. This is a
+    #     strong, specific signal (an arrow or a real formula), so it fires
+    #     before the curriculum demo / library so "CH4" or "2H2+O2->2H2O" is
+    #     never mis-routed to a math demo.
+    chem = _chemistry_scene(prompt)
+    if chem is not None:
+        result = _chemistry_response(chem, prompt)
+        scene_cache_put(prompt, preferred_mode, result)
+        return result
 
     # 1.5 Curriculum demo — the interactive "fill in the values" path. If the
     #     prompt clearly names an Algebra-1..Precalc topic, show its parameterized
@@ -2147,9 +2189,19 @@ def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
     while trimmed and trimmed[0].get("role") != "user":
         trimmed.pop(0)
     messages = trimmed + [{"role": "user", "content": question}]
+    # Adaptive thinking lets the tutor REASON through a "how do I solve this"
+    # question before answering (better step-by-step math correctness) while
+    # staying fast on simple "what does this mean" questions — Claude decides how
+    # much to think per turn. Thinking tokens count against max_tokens, so the cap
+    # is raised well above the old 2000 to leave room for thinking + a thorough,
+    # beginner-proof explanation. medium effort balances interactive latency
+    # against correctness. We only read the text block (thinking blocks, if any,
+    # are skipped by the `type == "text"` filter below).
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=2000,
+        max_tokens=8000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "medium"},
         system=build_tutor_system_prompt(viz),
         messages=messages,
     )

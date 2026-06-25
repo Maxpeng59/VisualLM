@@ -16,10 +16,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Server, both libraries (STEM scenes + curriculum demos), the generated data
-# (*_generated.json — scene, demo, and physics), the validator, and the UI.
-# The glob keeps new generated data files (e.g. physics) shipping automatically.
-COPY main.py scene_library.py demo_library.py validate_scene.js \
+# Server, the libraries (STEM scenes + curriculum demos + chemistry), the
+# generated data (*_generated.json — scene, demo, physics, chemistry), the
+# validator, and the UI. The glob keeps new generated data files shipping
+# automatically.
+COPY main.py scene_library.py demo_library.py chemistry.py validate_scene.js \
      *_generated.json \
      index.html app.js sandbox-worker.js styles.css ./
 

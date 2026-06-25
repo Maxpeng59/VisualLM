@@ -736,5 +736,154 @@ class DemoLibraryTests(unittest.TestCase):
         self.assertEqual(plan["demo_id"], "linear-slope-intercept")
 
 
+import chemistry  # noqa: E402
+
+
+class ChemistryFormulaTests(unittest.TestCase):
+    def test_parse_simple(self):
+        self.assertEqual(chemistry.parse_formula("H2O"), {"H": 2, "O": 1})
+        self.assertEqual(chemistry.parse_formula("C6H12O6"), {"C": 6, "H": 12, "O": 6})
+
+    def test_parse_parentheses(self):
+        self.assertEqual(chemistry.parse_formula("Ca(OH)2"), {"Ca": 1, "O": 2, "H": 2})
+
+    def test_parse_strips_charge(self):
+        self.assertEqual(chemistry.parse_formula("SO4^2-"), {"S": 1, "O": 4})
+        self.assertEqual(chemistry.parse_formula("NH4+"), {"N": 1, "H": 4})
+
+    def test_parse_rejects_nonformula(self):
+        self.assertIsNone(chemistry.parse_formula("xyz"))
+        self.assertIsNone(chemistry.parse_formula("2H2O"))  # leading coefficient
+        self.assertIsNone(chemistry.parse_formula(""))
+
+
+class ChemistryBalanceTests(unittest.TestCase):
+    def test_combustion_propane(self):
+        self.assertEqual(
+            chemistry.balance_equation(["C3H8", "O2"], ["CO2", "H2O"]), [1, 5, 3, 4]
+        )
+
+    def test_water_synthesis(self):
+        self.assertEqual(chemistry.balance_equation(["H2", "O2"], ["H2O"]), [2, 1, 2])
+
+    def test_rust(self):
+        self.assertEqual(chemistry.balance_equation(["Fe", "O2"], ["Fe2O3"]), [4, 3, 2])
+
+    def test_redox_permanganate(self):
+        # A genuinely hard balance — exercises the rational null-space solver.
+        self.assertEqual(
+            chemistry.balance_equation(
+                ["KMnO4", "HCl"], ["KCl", "MnCl2", "H2O", "Cl2"]
+            ),
+            [2, 16, 2, 2, 8, 5],
+        )
+
+    def test_unbalanceable_returns_none(self):
+        # No carbon source for the product — mass can't be conserved.
+        self.assertIsNone(chemistry.balance_equation(["H2", "O2"], ["CO2"]))
+
+
+class ChemistryVseprTests(unittest.TestCase):
+    def test_known_shapes(self):
+        cases = {
+            "CH4": "tetrahedral",
+            "NH3": "trigonal pyramidal",
+            "H2O": "bent",
+            "SF6": "octahedral",
+            "PCl5": "trigonal bipyramidal",
+            "BF3": "trigonal planar",
+            "BeCl2": "linear",
+            "XeF4": "square planar",
+        }
+        for formula, shape in cases.items():
+            mol = chemistry.vsepr_molecule(formula)
+            self.assertIsNotNone(mol, formula)
+            self.assertEqual(mol["shape"], shape, formula)
+            counts = chemistry.parse_formula(formula)
+            self.assertEqual(len(mol["atoms"]), sum(counts.values()), formula)
+
+    def test_co2_not_vsepr(self):
+        # CO2 has double bonds — not the single-bond hydride/halide VSEPR path.
+        self.assertIsNone(chemistry.vsepr_molecule("CO2"))
+
+
+class ChemistryDetectionTests(unittest.TestCase):
+    def test_formula_is_molecule(self):
+        self.assertEqual(chemistry.detect_chemistry("CH4"), ("molecule", "CH4"))
+
+    def test_reaction_is_balance(self):
+        kind, payload = chemistry.detect_chemistry("2H2 + O2 -> 2H2O")
+        self.assertEqual(kind, "balance")
+        self.assertEqual(payload, (["H2", "O2"], ["H2O"]))
+
+    def test_balance_command_prefix(self):
+        kind, payload = chemistry.detect_chemistry("balance Fe + O2 -> Fe2O3")
+        self.assertEqual(kind, "balance")
+        self.assertEqual(payload, (["Fe", "O2"], ["Fe2O3"]))
+
+    def test_bare_name(self):
+        self.assertEqual(chemistry.detect_chemistry("benzene"), ("molecule", "benzene"))
+
+    def test_does_not_hijack_math_or_physics(self):
+        for p in [
+            "Explain heat diffusion across a metal plate",
+            "y = sin(x) + 0.35 sin(3x)",
+            "derivative of x^2",
+            "Show a projectile launched at 22 m/s",
+            "x = 5",
+        ]:
+            self.assertIsNone(chemistry.detect_chemistry(p), p)
+
+    def test_ambiguous_word_needs_cue(self):
+        self.assertIsNone(chemistry.detect_chemistry("water"))
+        self.assertEqual(
+            chemistry.detect_chemistry("structure of water"), ("molecule", "water")
+        )
+
+
+class ChemistrySceneTests(unittest.TestCase):
+    def test_molecule_scene_shape(self):
+        sc = chemistry.chemistry_scene("CH4")
+        self.assertEqual(sc["kind"], "molecule")
+        self.assertEqual(sc["dimension"], "3D")
+        for needle in ("H.background", "cam.sphere", "H.text"):
+            self.assertIn(needle, sc["code"])
+
+    def test_balance_scene_shape(self):
+        sc = chemistry.chemistry_scene("C3H8 + O2 -> CO2 + H2O")
+        self.assertEqual(sc["kind"], "balance")
+        self.assertIn("5", sc["equation"])  # balanced coefficient present
+        self.assertIn("H.background", sc["code"])
+
+    def test_plan_routes_formula_to_chemistry(self):
+        plan = main.plan_visualization("CH4", "auto")
+        self.assertTrue(plan.get("from_chemistry"), plan.get("engine"))
+        self.assertEqual(plan["chem_kind"], "molecule")
+        self.assertEqual(plan["engine"], "chemistry")
+
+    def test_plan_routes_reaction_to_chemistry(self):
+        plan = main.plan_visualization("2H2 + O2 -> 2H2O", "auto")
+        self.assertTrue(plan.get("from_chemistry"))
+        self.assertEqual(plan["chem_kind"], "balance")
+
+    def test_plan_does_not_hijack_physics(self):
+        plan = main.plan_visualization("Show a projectile launched at 22 m/s", "auto")
+        self.assertFalse(plan.get("from_chemistry"))
+
+    def test_every_library_molecule_renders(self):
+        # Each curated molecule's rendered scene must run, paint, and label.
+        if not main.node_validator_available():
+            self.skipTest("node validator not installed")
+        for canon in chemistry.MOLECULES:
+            mol = chemistry.lookup_molecule(chemistry.MOLECULES[canon].get("formula", canon))
+            self.assertIsNotNone(mol, canon)
+            code = main.sanitize_code(chemistry._molecule_code(mol))
+            r = main.headless_validate(code)
+            self.assertIsNotNone(r, canon)
+            self.assertTrue(r["ok"], f"{canon} threw: {r.get('error')}")
+            self.assertTrue(r["painted"], f"{canon} drew nothing")
+            self.assertTrue(r["text"], f"{canon} had no labels")
+
+
 if __name__ == "__main__":
     unittest.main()
