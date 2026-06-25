@@ -543,9 +543,11 @@ def _load_generated(filename: str) -> list[dict]:
         return []
 
 
-# Generated curriculum demos: math (Algebra 1 → Precalculus) + physics.
+# Generated curriculum demos: math (Algebra 1 → Precalculus) + physics +
+# geometry & front-half calculus (limits, derivatives, applications).
 _GENERATED: list[dict] = _load_generated("demo_library_generated.json")
 _PHYSICS: list[dict] = _load_generated("physics_library_generated.json")
+_GEO_CALC: list[dict] = _load_generated("geometry_calculus_generated.json")
 
 # Hand-written demos first so they win id/keyword ties over generated ones.
-DEMO_LIBRARY: list[dict] = _BASE + _GENERATED + _PHYSICS
+DEMO_LIBRARY: list[dict] = _BASE + _GENERATED + _PHYSICS + _GEO_CALC
