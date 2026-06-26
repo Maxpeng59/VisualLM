@@ -1102,7 +1102,7 @@
         // BROWSER EDITION: everything runs client-side; no server generator.
         el.statusBadge.textContent = "Browser edition";
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Chemistry + 333 demos · runs in your browser";
+        el.modelLabel.textContent = "Chemistry · interactive demos · step-by-step solver · runs in your browser";
       } else {
         el.statusBadge.textContent = "No generator";
         el.statusBadge.className = "status-pill error";
