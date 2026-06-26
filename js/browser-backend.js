@@ -54,7 +54,7 @@
 
     if (path === "/api/visualize" && method === "POST") {
       await global.VisualLMPlanner.ready;
-      const scene = global.VisualLMPlanner.plan(body.prompt || "", body.preferred_mode || "auto");
+      const scene = await global.VisualLMPlanner.plan(body.prompt || "", body.preferred_mode || "auto");
       return json(scene);
     }
 
