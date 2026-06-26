@@ -533,7 +533,10 @@ textarea:focus, input[type="text"]:focus {
 #sceneTag { color: var(--info); font-weight: 500; }
 .orbit-hint {
   position: absolute;
-  bottom: 12px;
+  /* Top-right, not bottom-right: the long hint text would otherwise extend
+   * across a narrow canvas and overlap the bottom-left status pills. The scene
+   * title is top-LEFT, so the top-right corner is free. */
+  top: 12px;
   right: 14px;
   z-index: 2;
   pointer-events: none;
@@ -795,7 +798,12 @@ textarea:focus, input[type="text"]:focus {
   .workspace {
     grid-template-columns: 1fr;
   }
-  .stage-panel { min-height: 50vh; }
+  /* On mobile, put the PRIMARY action (the prompt) first, then the canvas, then
+   * the explanation — otherwise the prompt box sits two screens below a wall of
+   * explanation text and a first-time user can't find where to type. */
+  .right-panel { order: 1; }
+  .stage-panel { order: 2; min-height: 50vh; }
+  .left-panel  { order: 3; }
   .tutor-grid { grid-template-columns: 1fr; }
 }
 

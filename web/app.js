@@ -85,12 +85,15 @@
     s = s.replace(/_\{+([^{}]+)\}+/g, "_$1");
     s = s.replace(/\^\{+([^{}]+)\}+/g, "^$1");
 
+    // LaTeX sizing markers (\left( \right) \big …) — strip the command but keep
+    // the bracket. Must run BEFORE the generic \word converter below, which would
+    // otherwise turn "\left" into the English word "left" and then we'd wrongly
+    // delete real "left"/"right" words from prose ("Reactants (left) …").
+    s = s.replace(/\\(left|right|bigg?|Bigg?)\b/g, "");
     // Greek + common symbols / function names.
     s = s.replace(/\\([A-Za-z]+)/g, (_, name) =>
       Object.prototype.hasOwnProperty.call(GREEK, name) ? GREEK[name] : name
     );
-    // Stray "left"/"right" sizing markers — leave the inner brackets.
-    s = s.replace(/\b(left|right)\b/g, "");
     // Any lone backslash left before whitespace/punctuation is LaTeX residue.
     s = s.replace(/\\(?=[\s.,;:)\]}])/g, "");
     // Tidy spaces.
@@ -106,7 +109,9 @@
     // 3. Markdown: code, bold, italics, headers.
     s = s.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
     s = s.replace(/\*\*([^*\n][^*]*?)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/(?<![*\w])\*([^*\n]+?)\*(?!\w)/g, "<em>$1</em>");
+    // Italics: require non-space just inside the asterisks (CommonMark) so a
+    // multiplication like "gamma * m * c^2" is NOT treated as emphasis.
+    s = s.replace(/(?<![*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\w)/g, "<em>$1</em>");
     s = s.replace(/^#{1,6}\s+(.+)$/gm, "<strong>$1</strong>");
 
     // 4. Lists, line by line. Group consecutive same-type items, even when
@@ -1017,7 +1022,10 @@
     btn.textContent = text;
     btn.addEventListener("click", () => {
       el.chatInput.value = (opts && opts.value) || text;
-      el.chatInput.focus();
+      // Scroll the chat into view FIRST — the tutor sits below the fold, so
+      // without this the box fills silently and it looks like nothing happened.
+      el.chatInput.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.chatInput.focus({ preventScroll: true });
       // Put the caret at the end so the student can keep typing their specifics.
       const v = el.chatInput.value;
       el.chatInput.setSelectionRange(v.length, v.length);

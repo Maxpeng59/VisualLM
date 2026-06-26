@@ -1848,6 +1848,25 @@ def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str, peq: str = "") -> 
     return score
 
 
+# Everyday words that are ALSO demo keywords. A long natural-language prompt
+# ("how do vaccines work", "power dynamics in a relationship") whose only match
+# comes from one of these shouldn't confidently serve a wrong demo.
+_WEAK_TOPIC_WORDS = frozenset(
+    "work power field function real point line value model rate range table mean series root".split()
+)
+
+
+def _weak_prose_match(prompt: str, sc: dict, score: float) -> bool:
+    """True if a borderline match for a multi-word sentence rests ONLY on common
+    everyday words — in which case we'd rather show the honest 'no clear topic'
+    fallback than a confidently-wrong demo."""
+    if score > 2.0 or len((prompt or "").split()) < 4:
+        return False
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks2 = (_tokenize(prompt) - _MATCH_STOPWORDS) - _WEAK_TOPIC_WORDS
+    return _scene_score(sc, ptext, ptoks2, "auto", _prompt_equation(prompt)) < 2.0
+
+
 def _library_scored(prompt: str, mode: str) -> list[tuple[dict, float]]:
     """All library scenes scored against the prompt, best first (score > 0)."""
     if not SCENE_LIBRARY:
@@ -2025,7 +2044,8 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     #     demo (editable + explained) rather than generating code. Takes priority
     #     over the static library so an interactive version wins when both exist.
     demo, demo_score = demo_match(prompt)
-    if demo is not None and demo_score >= _DEMO_THRESHOLD:
+    if (demo is not None and demo_score >= _DEMO_THRESHOLD
+            and not _weak_prose_match(prompt, demo, demo_score)):
         return _demo_scene(demo, prompt)
 
     # 2. Strong curated match — instant, known-correct. The bar is high when a
@@ -2043,7 +2063,8 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     # firing on an ambiguous near-tie between unrelated scenes. Base scenes are
     # ordered first, so they win ties.
     confident = lib_score >= 5.0 or (lib_score - runner_up) >= 1.5
-    if lib_scene is not None and lib_score >= strong_threshold and confident:
+    if (lib_scene is not None and lib_score >= strong_threshold and confident
+            and not _weak_prose_match(prompt, lib_scene, lib_score)):
         result = _library_scene(lib_scene, prompt)
         scene_cache_put(prompt, preferred_mode, result)
         return result

@@ -329,12 +329,227 @@ def _solver_code(result, prompt: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Polynomial equation solver (numeric quadratic / linear in one variable)
+# --------------------------------------------------------------------------- #
+
+_FUNC_RE = re.compile(r"sin|cos|tan|sec|csc|cot|sqrt|log|ln|abs|exp|pi|sum|int|mod")
+
+
+def _parse_poly_side(s: str):
+    """'x^2-5x+6' -> {0:6.0,1:-5.0,2:1.0}, or None if not a deg<=2 polynomial."""
+    s = s.replace("*", "")
+    if not s:
+        return {0: 0.0, 1: 0.0, 2: 0.0}
+    s = s.replace("-", "+-")
+    coeffs = {0: 0.0, 1: 0.0, 2: 0.0}
+    for term in s.split("+"):
+        if not term:
+            continue
+        m = re.match(r"^(-?\d*\.?\d*)x(?:\^(\d+))?$", term)
+        if m:
+            cs, ps = m.group(1), m.group(2)
+            c = -1.0 if cs == "-" else (1.0 if cs in ("", "+") else float(cs))
+            p = int(ps) if ps else 1
+            if p > 2:
+                return None
+            coeffs[p] += c
+            continue
+        m2 = re.match(r"^(-?\d+\.?\d*)$", term)
+        if m2:
+            coeffs[0] += float(m2.group(1))
+            continue
+        return None
+    return coeffs
+
+
+def parse_polynomial(prompt: str):
+    """Parse a NUMERIC single-variable polynomial equation (degree 1 or 2):
+    'x^2 - 5x + 6 = 0' -> ('x', {2:1,1:-5,0:6}, 2). None if it isn't one
+    (multiple variables, symbolic coefficients, functions, etc.)."""
+    if not prompt or prompt.count("=") != 1:
+        return None
+    s = prompt.strip().lower().replace(" ", "")
+    s = s.replace("²", "^2").replace("³", "^3").replace("−", "-").replace("–", "-")
+    s = re.sub(r"^(solve|find|roots?of|zeros?of)", "", s)
+    if _FUNC_RE.search(s):
+        return None
+    letters = set(re.findall(r"[a-z]", s))
+    if len(letters) != 1:
+        return None
+    var = letters.pop()
+    s = s.replace(var, "x")
+    if not re.fullmatch(r"[0-9x.+\-^=]+", s):
+        return None
+    left, right = s.split("=")
+    cl = _parse_poly_side(left)
+    cr = _parse_poly_side(right)
+    if cl is None or cr is None:
+        return None
+    coeffs = {p: cl[p] - cr[p] for p in (0, 1, 2)}
+    degree = 2 if abs(coeffs[2]) > 1e-12 else (1 if abs(coeffs[1]) > 1e-12 else 0)
+    if degree == 0:
+        return None
+    return (var if var != "x" else "x", coeffs, degree)
+
+
+def _fmt(x: float) -> str:
+    """Trim a float for display: 3.0 -> '3', 2.5 -> '2.5', 1.4142 -> '1.41'."""
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    return f"{x:.2f}".rstrip("0").rstrip(".")
+
+
+def solve_quadratic(coeffs: dict, var: str):
+    a, b, c = coeffs[2], coeffs[1], coeffs[0]
+    D = b * b - 4 * a * c
+    vx = -b / (2 * a)
+    vy = c - b * b / (4 * a)
+    steps = [
+        {"title": "Standard form", "formula": f"a{var}² + b{var} + c = 0",
+         "detail": f"a = {_fmt(a)},  b = {_fmt(b)},  c = {_fmt(c)}"},
+        {"title": "Discriminant", "formula": "D = b² − 4ac",
+         "detail": f"D = ({_fmt(b)})² − 4·({_fmt(a)})·({_fmt(c)}) = {_fmt(D)}"
+                   + ("  → two real roots" if D > 1e-9 else ("  → one repeated root" if abs(D) <= 1e-9 else "  → no real roots"))},
+        {"title": "Quadratic formula", "formula": f"{var} = (−b ± √D) / (2a)",
+         "detail": f"{var} = ({_fmt(-b)} ± √{_fmt(D)}) / {_fmt(2 * a)}"},
+    ]
+    real_roots = []
+    if D > 1e-9:
+        r1 = (-b + math.sqrt(D)) / (2 * a)
+        r2 = (-b - math.sqrt(D)) / (2 * a)
+        real_roots = [r1, r2]
+        steps.append({"title": "The two roots", "formula": f"{var}₁, {var}₂",
+                      "detail": f"{var} = {_fmt(r1)}  or  {var} = {_fmt(r2)}"})
+    elif abs(D) <= 1e-9:
+        r1 = -b / (2 * a)
+        real_roots = [r1]
+        steps.append({"title": "One repeated root", "formula": f"{var} = −b / 2a",
+                      "detail": f"{var} = {_fmt(r1)}  (the vertex touches the x-axis)"})
+    else:
+        re_ = -b / (2 * a)
+        im = math.sqrt(-D) / (2 * a)
+        steps.append({"title": "Complex roots", "formula": f"{var} = −b/2a ± (√−D /2a) i",
+                      "detail": f"{var} = {_fmt(re_)} ± {_fmt(abs(im))}i  (parabola never crosses the x-axis)"})
+    return {"kind": "quadratic", "var": var, "coeffs": coeffs, "steps": steps,
+            "real_roots": real_roots, "vertex": [vx, vy], "discriminant": D}
+
+
+def solve_linear(coeffs: dict, var: str):
+    b, c = coeffs[1], coeffs[0]   # b*x + c = 0
+    root = -c / b
+    steps = [
+        {"title": "Standard form", "formula": f"a{var} + b = 0",
+         "detail": f"a = {_fmt(b)},  b = {_fmt(c)}"},
+        {"title": f"Isolate {var}", "formula": f"a{var} = −b",
+         "detail": f"{_fmt(b)}·{var} = {_fmt(-c)}"},
+        {"title": "Solve", "formula": f"{var} = −b / a",
+         "detail": f"{var} = {_fmt(-c)} / {_fmt(b)} = {_fmt(root)}"},
+    ]
+    return {"kind": "linear", "var": var, "coeffs": coeffs, "steps": steps,
+            "real_roots": [root], "vertex": None, "discriminant": None}
+
+
+def _poly_code(result) -> str:
+    a = result["coeffs"][2]
+    b = result["coeffs"][1]
+    c = result["coeffs"][0]
+    roots = result.get("real_roots", [])
+    var = result["var"]
+    # Pick a viewing window that frames the roots / vertex on-screen.
+    if result["kind"] == "quadratic":
+        vx = result["vertex"][0]
+        span = max(3.0, *( [abs(r - vx) * 1.5 for r in roots] or [3.0] ))
+        xmin, xmax = vx - span, vx + span
+    else:
+        r = roots[0]
+        xmin, xmax = r - 5, r + 5
+    ys = [a * xmin * xmin + b * xmin + c, a * xmax * xmax + b * xmax + c]
+    if result["kind"] == "quadratic":
+        ys.append(result["vertex"][1])
+    lo, hi = min(ys + [0.0]), max(ys + [0.0])
+    pad = (hi - lo) * 0.18 + 1
+    data = json.dumps({"steps": result["steps"], "a": a, "b": b, "c": c, "roots": roots,
+                       "var": var, "xMin": xmin, "xMax": xmax, "yMin": lo - pad, "yMax": hi + pad,
+                       "vertex": result.get("vertex")}, ensure_ascii=False)
+    return (
+        "H.background();\n"
+        f"const D = {data};\n"
+        "const w = H.W, hgt = H.H;\n"
+        "const N = D.steps.length;\n"
+        "const k = Math.floor((t / 3.4) % N);\n"
+        "const st = D.steps[k];\n"
+        "H.text('Step-by-step solution', 24, 30, { color: H.colors.ink, size: 18, weight: 700 });\n"
+        "H.text('Slide ' + (k + 1) + ' of ' + N + '  ·  solving for ' + D.var + ' with your numbers', 24, 52, { color: H.colors.sub, size: 13 });\n"
+        "for (let i = 0; i < N; i++) {\n"
+        "  H.circle(24 + i * 16, 70, 5, { fill: i === k ? H.colors.accent : (i < k ? H.colors.good : H.colors.grid) });\n"
+        "}\n"
+        "const v = H.plot2d({ xMin: D.xMin, xMax: D.xMax, yMin: D.yMin, yMax: D.yMax, box: { x: w * 0.40, y: hgt * 0.24, w: w * 0.55, h: hgt * 0.62 } });\n"
+        "v.grid(); v.axes();\n"
+        "v.fn(function (x) { return D.a * x * x + D.b * x + D.c; }, { color: H.colors.accent, width: 3 });\n"
+        "if (D.vertex) v.dot(D.vertex[0], D.vertex[1], { r: 5, fill: H.colors.warn });\n"
+        "for (let i = 0; i < D.roots.length; i++) {\n"
+        "  v.dot(D.roots[i], 0, { r: 7, fill: H.colors.good });\n"
+        "  v.text(D.var + '=' + (Math.round(D.roots[i] * 100) / 100), D.roots[i], 0, { color: H.colors.good, size: 12 });\n"
+        "}\n"
+        "// A probe sweeps the curve so it visibly animates.\n"
+        "const px = D.xMin + (D.xMax - D.xMin) * (0.5 + 0.5 * Math.sin(t));\n"
+        "v.dot(px, D.a * px * px + D.b * px + D.c, { r: 5, fill: H.colors.accent2 });\n"
+        "const cx = 24, cy = hgt * 0.30, cw = w * 0.33;\n"
+        "H.rect(cx, cy, cw, 150, { fill: 'rgba(124,196,255,0.07)', stroke: H.colors.accent, width: 1.4, radius: 12 });\n"
+        "H.text(st.title, cx + 16, cy + 28, { color: H.colors.accent, size: 16, weight: 700, maxWidth: cw - 32 });\n"
+        "H.text(st.formula, cx + 16, cy + 62, { color: H.colors.ink, size: 15, weight: 700, maxWidth: cw - 32 });\n"
+        "H.text(st.detail, cx + 16, cy + 96, { color: H.colors.sub, size: 13, maxWidth: cw - 32 });\n"
+    )
+
+
+def _polynomial_scene(prompt: str):
+    parsed = parse_polynomial(prompt)
+    if not parsed:
+        return None
+    var, coeffs, degree = parsed
+    if degree == 2:
+        result = solve_quadratic(coeffs, var)
+        kind_name = "quadratic equation"
+        nroots = len(result["real_roots"])
+        summary = (f"A worked, step-by-step solution of your {kind_name}. The slides set up the "
+                   "standard form, compute the discriminant, apply the quadratic formula, and read off "
+                   + ("the two real roots" if nroots == 2 else ("the repeated root" if nroots == 1 else "the complex roots"))
+                   + " — with the parabola drawn so you can see the roots as its x-intercepts.")
+    elif degree == 1:
+        result = solve_linear(coeffs, var)
+        kind_name = "linear equation"
+        summary = ("A worked, step-by-step solution of your linear equation: move to standard form, isolate "
+                   f"{var}, and solve — with the line drawn so you can see the solution as its x-intercept.")
+    else:
+        return None
+    return {
+        "title": f"Solving your {kind_name} — step by step",
+        "tag": "Worked solution",
+        "dimension": "2D",
+        "equation": prompt.strip(),
+        "summary": summary,
+        "bullets": [
+            "Each slide is one step of the solution, advancing automatically.",
+            "The curve is drawn to scale; roots show as x-intercepts (green dots).",
+            "It uses YOUR coefficients — not a generic example.",
+            "The discriminant tells you how many real roots to expect." if degree == 2
+            else "A linear equation has exactly one solution.",
+        ],
+        "student_prompts": [
+            "Why does the discriminant decide the number of real roots?" if degree == 2 else "How do I check a linear solution?",
+            "What do the roots mean on the graph?",
+            "How would I solve this by factoring instead?",
+        ],
+        "code": _poly_code(result),
+        "kind": result["kind"],
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Public entry point
 # --------------------------------------------------------------------------- #
 
-def solver_scene(prompt: str):
-    """Return a scene-content dict for a specific solvable problem, or None.
-    `code` is RAW (caller runs it through sanitize_code, like the other paths)."""
+def _triangle_scene(prompt: str):
     given = parse_triangle(prompt)
     if not given:
         return None
@@ -374,3 +589,10 @@ def solver_scene(prompt: str):
         "code": _solver_code(result, prompt),
         "kind": "triangle",
     }
+
+
+def solver_scene(prompt: str):
+    """Return a worked-solution scene for a SPECIFIC numeric problem, or None.
+    Tries each solver in turn: triangle, then numeric polynomial (quadratic /
+    linear). `code` is RAW (the caller runs sanitize_code, like the other paths)."""
+    return _triangle_scene(prompt) or _polynomial_scene(prompt)
