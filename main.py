@@ -1767,8 +1767,64 @@ _MATCH_STOPWORDS = frozenset(
     "draw plot with for as its it this that what why over time using see".split()
 )
 
+# --- Equation-form matching ------------------------------------------------
+# A bare equation ("E=mc^2", "F=ma", "PV=nRT") tokenizes to junk ({e,mc,2}) that
+# misses keyword/title matching entirely. So we ALSO match on a normalized
+# equation signature: pull the equation token out of the prompt, normalize it
+# (keeping '=' so the match is anchored and false-positive-resistant), and
+# compare it to each demo's normalized equation / title / equation-keywords.
+_EQ_SUB = str.maketrans({"²": "2", "³": "3", "⁴": "4", "λ": "l", "·": "", "×": "", "−": "-", "–": "-"})
 
-def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str) -> float:
+
+def _norm_eq(s: str) -> str:
+    s = (s or "").lower().translate(_EQ_SUB)
+    return re.sub(r"[^a-z0-9=+/]", "", s)
+
+
+def _prompt_equation(prompt: str) -> str:
+    """Extract + normalize the equation token from a prompt, or '' if none.
+    'show me E=mc^2' -> 'e=mc2';  'F = ma' -> 'f=ma'."""
+    if not prompt or "=" not in prompt:
+        return ""
+    tight = re.sub(r"\s*([=+\-*/^·×])\s*", r"\1", prompt)
+    cands = [tok for tok in tight.split() if "=" in tok]
+    if not cands:
+        return ""
+    return _norm_eq(max(cands, key=len))
+
+
+def _sort_runs(s: str) -> str:
+    """Sort each run of >=2 letters so a product is order-independent:
+    'mc2' and 'cm2' both -> 'cm2' (handles E=CM^2 written for E=mc^2)."""
+    return re.sub(r"[a-z]{2,}", lambda m: "".join(sorted(m.group(0))), s)
+
+
+def _equation_boost(sc: dict, peq: str) -> float:
+    """Score boost if the prompt's equation matches this scene's equation form."""
+    if not peq or len(peq) < 4:
+        return 0.0
+    sigs = [_norm_eq(sc.get("equation", "")), _norm_eq(sc.get("title", ""))]
+    sigs += [_norm_eq(k) for k in sc.get("keywords", []) if "=" in str(k)]
+    sigs = [s for s in sigs if s]
+    boost = 0.0
+    for sig in sigs:
+        if peq == sig:
+            return 6.0
+        if peq in sig or (len(sig) >= 4 and sig in peq):
+            boost = max(boost, 5.0)
+    if boost == 0.0:
+        # Fall back to order-independent (commutative-product) matching.
+        peqs = _sort_runs(peq)
+        for sig in sigs:
+            ss = _sort_runs(sig)
+            if peqs == ss:
+                return 5.0
+            if (len(peqs) >= 4 and peqs in ss) or (len(ss) >= 4 and ss in peqs):
+                boost = max(boost, 4.0)
+    return boost
+
+
+def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str, peq: str = "") -> float:
     score = 0.0
     for kw in sc.get("keywords", []):
         k = kw.lower().strip()
@@ -1784,6 +1840,8 @@ def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str) -> float:
     tag_toks = _tokenize(sc.get("tag", "")) - _MATCH_STOPWORDS
     score += 1.0 * len(title_toks & ptoks)
     score += 0.5 * len(tag_toks & ptoks)
+    # A bare/embedded equation matches the scene's equation form directly.
+    score += _equation_boost(sc, peq)
     # Respect an explicit 2D/3D preference.
     if mode in ("2d", "3d") and sc.get("dimension", "").lower() != mode:
         score -= 1.5
@@ -1796,7 +1854,8 @@ def _library_scored(prompt: str, mode: str) -> list[tuple[dict, float]]:
         return []
     ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
     ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
-    scored = [(sc, _scene_score(sc, ptext, ptoks, mode)) for sc in SCENE_LIBRARY]
+    peq = _prompt_equation(prompt)
+    scored = [(sc, _scene_score(sc, ptext, ptoks, mode, peq)) for sc in SCENE_LIBRARY]
     scored = [t for t in scored if t[1] > 0]
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -1838,7 +1897,8 @@ def _demo_scored(prompt: str) -> list[tuple[dict, float]]:
         return []
     ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
     ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
-    scored = [(d, _scene_score(d, ptext, ptoks, "auto")) for d in DEMO_LIBRARY]
+    peq = _prompt_equation(prompt)
+    scored = [(d, _scene_score(d, ptext, ptoks, "auto", peq)) for d in DEMO_LIBRARY]
     scored = [t for t in scored if t[1] > 0]
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
