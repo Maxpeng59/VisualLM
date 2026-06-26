@@ -93,6 +93,20 @@
     return score;
   }
 
+  // Everyday words that are also demo keywords. A multi-word sentence whose only
+  // match comes from these shouldn't confidently serve a demo (mirrors main.py).
+  const WEAK_TOPIC_WORDS = new Set(
+    "work power field function real point line value model rate range table mean series root".split(" ")
+  );
+  function weakProseMatch(prompt, sc, score) {
+    if (score > 2.0 || String(prompt || "").split(/\s+/).filter(Boolean).length < 4) return false;
+    const ptext = ptextOf(prompt);
+    const ptoks = tokensMinusStop(prompt);
+    const ptoks2 = new Set();
+    for (const tk of ptoks) if (!WEAK_TOPIC_WORDS.has(tk)) ptoks2.add(tk);
+    return sceneScore(sc, ptext, ptoks2, "auto", promptEquation(prompt)) < 2.0;
+  }
+
   function ptextOf(prompt) {
     return " " + String(prompt || "").toLowerCase().replace(/\s+/g, " ") + " ";
   }
@@ -125,7 +139,7 @@
 
   global.VisualLMMatch = {
     loadData(demos, scenes) { DEMOS = demos || []; SCENES = scenes || []; },
-    libraryScored, demoScored, demoMatch, sceneScore, tokenize,
+    libraryScored, demoScored, demoMatch, sceneScore, tokenize, weakProseMatch,
     get demos() { return DEMOS; },
     get scenes() { return SCENES; },
   };

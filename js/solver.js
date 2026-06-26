@@ -245,7 +245,7 @@
     );
   }
 
-  function scene(prompt) {
+  function triangleScene(prompt) {
     const given = parseTriangle(prompt);
     if (!given) return null;
     const result = solveTriangle(given);
@@ -278,5 +278,176 @@
     };
   }
 
-  global.VisualLMSolver = { scene, parseTriangle, solveTriangle };
+  // --- Polynomial equation solver (numeric quadratic / linear) ------------
+  const FUNC_RE = /sin|cos|tan|sec|csc|cot|sqrt|log|ln|abs|exp|pi|sum|int|mod/;
+
+  function parsePolySide(s) {
+    s = s.replace(/\*/g, "");
+    if (!s) return { 0: 0, 1: 0, 2: 0 };
+    s = s.replace(/-/g, "+-");
+    const coeffs = { 0: 0, 1: 0, 2: 0 };
+    for (const term of s.split("+")) {
+      if (!term) continue;
+      let m = term.match(/^(-?\d*\.?\d*)x(?:\^(\d+))?$/);
+      if (m) {
+        const cs = m[1], ps = m[2];
+        const c = cs === "-" ? -1 : (cs === "" || cs === "+" ? 1 : parseFloat(cs));
+        const p = ps ? parseInt(ps, 10) : 1;
+        if (p > 2) return null;
+        coeffs[p] += c;
+        continue;
+      }
+      m = term.match(/^(-?\d+\.?\d*)$/);
+      if (m) { coeffs[0] += parseFloat(m[1]); continue; }
+      return null;
+    }
+    return coeffs;
+  }
+
+  function parsePolynomial(prompt) {
+    if (!prompt || (prompt.split("=").length - 1) !== 1) return null;
+    let s = prompt.trim().toLowerCase().replace(/\s/g, "");
+    s = s.replace(/²/g, "^2").replace(/³/g, "^3").replace(/[−–]/g, "-");
+    s = s.replace(/^(solve|find|rootsof|rootof|zerosof|zeroof)/, "");
+    if (FUNC_RE.test(s)) return null;
+    const letters = Array.from(new Set(s.match(/[a-z]/g) || []));
+    if (letters.length !== 1) return null;
+    const varName = letters[0];
+    s = s.split(varName).join("x");
+    if (!/^[0-9x.+\-^=]+$/.test(s)) return null;
+    const parts = s.split("=");
+    const cl = parsePolySide(parts[0]), cr = parsePolySide(parts[1]);
+    if (!cl || !cr) return null;
+    const coeffs = { 0: cl[0] - cr[0], 1: cl[1] - cr[1], 2: cl[2] - cr[2] };
+    const degree = Math.abs(coeffs[2]) > 1e-12 ? 2 : (Math.abs(coeffs[1]) > 1e-12 ? 1 : 0);
+    if (degree === 0) return null;
+    return { var: varName, coeffs, degree };
+  }
+
+  function fmt(x) {
+    if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+    return (Math.round(x * 100) / 100).toString();
+  }
+
+  function solveQuadratic(coeffs, v) {
+    const a = coeffs[2], b = coeffs[1], c = coeffs[0];
+    const D = b * b - 4 * a * c;
+    const vx = -b / (2 * a), vy = c - (b * b) / (4 * a);
+    const steps = [
+      { title: "Standard form", formula: `a${v}² + b${v} + c = 0`, detail: `a = ${fmt(a)},  b = ${fmt(b)},  c = ${fmt(c)}` },
+      { title: "Discriminant", formula: "D = b² − 4ac", detail: `D = (${fmt(b)})² − 4·(${fmt(a)})·(${fmt(c)}) = ${fmt(D)}` + (D > 1e-9 ? "  → two real roots" : (Math.abs(D) <= 1e-9 ? "  → one repeated root" : "  → no real roots")) },
+      { title: "Quadratic formula", formula: `${v} = (−b ± √D) / (2a)`, detail: `${v} = (${fmt(-b)} ± √${fmt(D)}) / ${fmt(2 * a)}` },
+    ];
+    let realRoots = [];
+    if (D > 1e-9) {
+      const r1 = (-b + Math.sqrt(D)) / (2 * a), r2 = (-b - Math.sqrt(D)) / (2 * a);
+      realRoots = [r1, r2];
+      steps.push({ title: "The two roots", formula: `${v}₁, ${v}₂`, detail: `${v} = ${fmt(r1)}  or  ${v} = ${fmt(r2)}` });
+    } else if (Math.abs(D) <= 1e-9) {
+      const r1 = -b / (2 * a);
+      realRoots = [r1];
+      steps.push({ title: "One repeated root", formula: `${v} = −b / 2a`, detail: `${v} = ${fmt(r1)}  (the vertex touches the x-axis)` });
+    } else {
+      const rev = -b / (2 * a), im = Math.sqrt(-D) / (2 * a);
+      steps.push({ title: "Complex roots", formula: `${v} = −b/2a ± (√−D /2a) i`, detail: `${v} = ${fmt(rev)} ± ${fmt(Math.abs(im))}i  (parabola never crosses the x-axis)` });
+    }
+    return { kind: "quadratic", var: v, coeffs, steps, real_roots: realRoots, vertex: [vx, vy], discriminant: D };
+  }
+
+  function solveLinear(coeffs, v) {
+    const b = coeffs[1], c = coeffs[0];
+    const root = -c / b;
+    const steps = [
+      { title: "Standard form", formula: `a${v} + b = 0`, detail: `a = ${fmt(b)},  b = ${fmt(c)}` },
+      { title: `Isolate ${v}`, formula: `a${v} = −b`, detail: `${fmt(b)}·${v} = ${fmt(-c)}` },
+      { title: "Solve", formula: `${v} = −b / a`, detail: `${v} = ${fmt(-c)} / ${fmt(b)} = ${fmt(root)}` },
+    ];
+    return { kind: "linear", var: v, coeffs, steps, real_roots: [root], vertex: null, discriminant: null };
+  }
+
+  function polyCode(result) {
+    const a = result.coeffs[2], b = result.coeffs[1], c = result.coeffs[0];
+    const roots = result.real_roots || [];
+    let xmin, xmax;
+    if (result.kind === "quadratic") {
+      const vx = result.vertex[0];
+      const span = Math.max(3, ...(roots.length ? roots.map((r) => Math.abs(r - vx) * 1.5) : [3]));
+      xmin = vx - span; xmax = vx + span;
+    } else {
+      const r = roots[0]; xmin = r - 5; xmax = r + 5;
+    }
+    const ys = [a * xmin * xmin + b * xmin + c, a * xmax * xmax + b * xmax + c, 0];
+    if (result.kind === "quadratic") ys.push(result.vertex[1]);
+    const lo = Math.min(...ys), hi = Math.max(...ys), pad = (hi - lo) * 0.18 + 1;
+    const data = JSON.stringify({ steps: result.steps, a, b, c, roots, var: result.var, xMin: xmin, xMax: xmax, yMin: lo - pad, yMax: hi + pad, vertex: result.vertex });
+    return (
+      "H.background();\n" +
+      "const D = " + data + ";\n" +
+      "const w = H.W, hgt = H.H;\n" +
+      "const N = D.steps.length;\n" +
+      "const k = Math.floor((t / 3.4) % N);\n" +
+      "const st = D.steps[k];\n" +
+      "H.text('Step-by-step solution', 24, 30, { color: H.colors.ink, size: 18, weight: 700 });\n" +
+      "H.text('Slide ' + (k + 1) + ' of ' + N + '  ·  solving for ' + D.var + ' with your numbers', 24, 52, { color: H.colors.sub, size: 13 });\n" +
+      "for (let i = 0; i < N; i++) {\n" +
+      "  H.circle(24 + i * 16, 70, 5, { fill: i === k ? H.colors.accent : (i < k ? H.colors.good : H.colors.grid) });\n" +
+      "}\n" +
+      "const v = H.plot2d({ xMin: D.xMin, xMax: D.xMax, yMin: D.yMin, yMax: D.yMax, box: { x: w * 0.40, y: hgt * 0.24, w: w * 0.55, h: hgt * 0.62 } });\n" +
+      "v.grid(); v.axes();\n" +
+      "v.fn(function (x) { return D.a * x * x + D.b * x + D.c; }, { color: H.colors.accent, width: 3 });\n" +
+      "if (D.vertex) v.dot(D.vertex[0], D.vertex[1], { r: 5, fill: H.colors.warn });\n" +
+      "for (let i = 0; i < D.roots.length; i++) {\n" +
+      "  v.dot(D.roots[i], 0, { r: 7, fill: H.colors.good });\n" +
+      "  v.text(D.var + '=' + (Math.round(D.roots[i] * 100) / 100), D.roots[i], 0, { color: H.colors.good, size: 12 });\n" +
+      "}\n" +
+      "const px = D.xMin + (D.xMax - D.xMin) * (0.5 + 0.5 * Math.sin(t));\n" +
+      "v.dot(px, D.a * px * px + D.b * px + D.c, { r: 5, fill: H.colors.accent2 });\n" +
+      "const cx = 24, cy = hgt * 0.30, cw = w * 0.33;\n" +
+      "H.rect(cx, cy, cw, 150, { fill: 'rgba(124,196,255,0.07)', stroke: H.colors.accent, width: 1.4, radius: 12 });\n" +
+      "H.text(st.title, cx + 16, cy + 28, { color: H.colors.accent, size: 16, weight: 700, maxWidth: cw - 32 });\n" +
+      "H.text(st.formula, cx + 16, cy + 62, { color: H.colors.ink, size: 15, weight: 700, maxWidth: cw - 32 });\n" +
+      "H.text(st.detail, cx + 16, cy + 96, { color: H.colors.sub, size: 13, maxWidth: cw - 32 });\n"
+    );
+  }
+
+  function polynomialScene(prompt) {
+    const parsed = parsePolynomial(prompt);
+    if (!parsed) return null;
+    const { coeffs, degree } = parsed;
+    let result, kindName, summary;
+    if (degree === 2) {
+      result = solveQuadratic(coeffs, parsed.var);
+      kindName = "quadratic equation";
+      const n = result.real_roots.length;
+      summary = `A worked, step-by-step solution of your ${kindName}. The slides set up the standard form, compute the discriminant, apply the quadratic formula, and read off ` +
+        (n === 2 ? "the two real roots" : (n === 1 ? "the repeated root" : "the complex roots")) +
+        " — with the parabola drawn so you can see the roots as its x-intercepts.";
+    } else if (degree === 1) {
+      result = solveLinear(coeffs, parsed.var);
+      kindName = "linear equation";
+      summary = `A worked, step-by-step solution of your linear equation: move to standard form, isolate ${parsed.var}, and solve — with the line drawn so you can see the solution as its x-intercept.`;
+    } else return null;
+    return {
+      title: `Solving your ${kindName} — step by step`,
+      tag: "Worked solution", dimension: "2D", equation: prompt.trim(), summary,
+      bullets: [
+        "Each slide is one step of the solution, advancing automatically.",
+        "The curve is drawn to scale; roots show as x-intercepts (green dots).",
+        "It uses YOUR coefficients — not a generic example.",
+        degree === 2 ? "The discriminant tells you how many real roots to expect." : "A linear equation has exactly one solution.",
+      ],
+      student_prompts: [
+        degree === 2 ? "Why does the discriminant decide the number of real roots?" : "How do I check a linear solution?",
+        "What do the roots mean on the graph?",
+        "How would I solve this by factoring instead?",
+      ],
+      code: polyCode(result), kind: result.kind,
+    };
+  }
+
+  function scene(prompt) {
+    return triangleScene(prompt) || polynomialScene(prompt);
+  }
+
+  global.VisualLMSolver = { scene, parseTriangle, solveTriangle, parsePolynomial };
 })(typeof window !== "undefined" ? window : this);
