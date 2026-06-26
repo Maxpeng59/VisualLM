@@ -548,6 +548,7 @@ def _load_generated(filename: str) -> list[dict]:
 _GENERATED: list[dict] = _load_generated("demo_library_generated.json")
 _PHYSICS: list[dict] = _load_generated("physics_library_generated.json")
 _GEO_CALC: list[dict] = _load_generated("geometry_calculus_generated.json")
+_AP: list[dict] = _load_generated("ap_physics_chemistry_generated.json")
 
 # Hand-written demos first so they win id/keyword ties over generated ones.
-DEMO_LIBRARY: list[dict] = _BASE + _GENERATED + _PHYSICS + _GEO_CALC
+DEMO_LIBRARY: list[dict] = _BASE + _GENERATED + _PHYSICS + _GEO_CALC + _AP
