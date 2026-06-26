@@ -1722,6 +1722,15 @@ except Exception:  # noqa: BLE001 — optional; never block startup
     def _chemistry_scene(_prompt):  # type: ignore
         return None
 
+# Worked-solution slides: a SPECIFIC problem (real numbers + labels, e.g. a
+# triangle with given sides/angles) renders an animated step-by-step solution
+# using the student's own numbers — distinct from the topic demos.
+try:
+    from solver import solver_scene as _solver_scene  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    def _solver_scene(_prompt):  # type: ignore
+        return None
+
 _scene_cache_lock = threading.Lock()
 _scene_cache: dict[tuple, dict] = {}
 _SCENE_CACHE_MAX = 256
@@ -1896,6 +1905,27 @@ def _chemistry_response(sc: dict, prompt: str) -> dict:
     }
 
 
+def _solver_response(sc: dict, prompt: str) -> dict:
+    """Shape a worked-solution (step-by-step slides) scene into a full response."""
+    summary = sc.get("summary", "")
+    return {
+        "title": sc.get("title", "Worked solution"),
+        "tag": sc.get("tag", "Worked solution"),
+        "dimension": "2D",
+        "equation": sc.get("equation", ""),
+        "summary": summary,
+        "bullets": [str(b) for b in sc.get("bullets", [])][:4],
+        "student_prompts": [str(p) for p in sc.get("student_prompts", [])][:4],
+        "code": sanitize_code(sc.get("code", "")),
+        "explanation": summary,
+        "model": "solver",
+        "engine": "solver",
+        "prompt": prompt,
+        "from_solver": True,
+        "solver_kind": sc.get("kind", ""),
+    }
+
+
 # Demo fires on a clear topic hit (a couple of keyword/title matches). Below
 # this, fall through to the scene library / generative path.
 _DEMO_THRESHOLD = 2.0
@@ -1916,6 +1946,17 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     chem = _chemistry_scene(prompt)
     if chem is not None:
         result = _chemistry_response(chem, prompt)
+        scene_cache_put(prompt, preferred_mode, result)
+        return result
+
+    # 1.45 Worked solution — a SPECIFIC numeric problem (e.g. a triangle with
+    #      given sides/angles) renders animated step-by-step slides that solve it
+    #      WITH the student's numbers. Fires before the topic demo so a concrete
+    #      problem gets a worked solution, while "law of sines" still teaches the
+    #      general method. Requires real numbers + labels, so topics don't trigger it.
+    solv = _solver_scene(prompt)
+    if solv is not None:
+        result = _solver_response(solv, prompt)
         scene_cache_put(prompt, preferred_mode, result)
         return result
 
