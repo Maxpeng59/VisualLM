@@ -31,8 +31,48 @@
     return n;
   }
 
-  // Mirrors _scene_score(sc, ptext, ptoks, mode).
-  function sceneScore(sc, ptext, ptoks, mode) {
+  // Equation-form matching (mirrors main.py _norm_eq / _prompt_equation /
+  // _equation_boost): a bare equation like "E=mc^2" tokenizes to junk, so we
+  // match a normalized equation signature instead.
+  function normEq(s) {
+    s = String(s || "").toLowerCase()
+      .replace(/²/g, "2").replace(/³/g, "3").replace(/⁴/g, "4")
+      .replace(/λ/g, "l").replace(/·/g, "").replace(/×/g, "").replace(/[−–]/g, "-");
+    return s.replace(/[^a-z0-9=+/]/g, "");
+  }
+  function promptEquation(prompt) {
+    if (!prompt || prompt.indexOf("=") < 0) return "";
+    const tight = String(prompt).replace(/\s*([=+\-*/^·×])\s*/g, "$1");
+    const cands = tight.split(/\s+/).filter((tok) => tok.indexOf("=") >= 0);
+    if (!cands.length) return "";
+    return normEq(cands.reduce((a, b) => (b.length > a.length ? b : a), ""));
+  }
+  function sortRuns(s) {
+    return s.replace(/[a-z]{2,}/g, (m) => m.split("").sort().join(""));
+  }
+  function equationBoost(sc, peq) {
+    if (!peq || peq.length < 4) return 0;
+    let sigs = [normEq(sc.equation || ""), normEq(sc.title || "")];
+    for (const k of sc.keywords || []) if (String(k).indexOf("=") >= 0) sigs.push(normEq(k));
+    sigs = sigs.filter(Boolean);
+    let boost = 0;
+    for (const sig of sigs) {
+      if (peq === sig) return 6.0;
+      if (sig.indexOf(peq) >= 0 || (sig.length >= 4 && peq.indexOf(sig) >= 0)) boost = Math.max(boost, 5.0);
+    }
+    if (boost === 0) {
+      const peqs = sortRuns(peq);
+      for (const sig of sigs) {
+        const ss = sortRuns(sig);
+        if (peqs === ss) return 5.0;
+        if ((peqs.length >= 4 && ss.indexOf(peqs) >= 0) || (ss.length >= 4 && peqs.indexOf(ss) >= 0)) boost = Math.max(boost, 4.0);
+      }
+    }
+    return boost;
+  }
+
+  // Mirrors _scene_score(sc, ptext, ptoks, mode, peq).
+  function sceneScore(sc, ptext, ptoks, mode, peq) {
     let score = 0;
     for (const kw of sc.keywords || []) {
       const k = String(kw).toLowerCase().trim();
@@ -47,6 +87,7 @@
     const tagToks = tokensMinusStop(sc.tag || sc.area || "");
     score += 1.0 * intersize(titleToks, ptoks);
     score += 0.5 * intersize(tagToks, ptoks);
+    score += equationBoost(sc, peq || "");
     const dim = String(sc.dimension || "").toLowerCase();
     if ((mode === "2d" || mode === "3d") && dim !== mode) score -= 1.5;
     return score;
@@ -60,7 +101,8 @@
     if (!SCENES.length) return [];
     const ptext = ptextOf(prompt);
     const ptoks = tokensMinusStop(prompt);
-    const scored = SCENES.map((sc) => [sc, sceneScore(sc, ptext, ptoks, mode)]).filter((t) => t[1] > 0);
+    const peq = promptEquation(prompt);
+    const scored = SCENES.map((sc) => [sc, sceneScore(sc, ptext, ptoks, mode, peq)]).filter((t) => t[1] > 0);
     scored.sort((a, b) => b[1] - a[1]);
     return scored;
   }
@@ -69,8 +111,9 @@
     if (!DEMOS.length) return [];
     const ptext = ptextOf(prompt);
     const ptoks = tokensMinusStop(prompt);
+    const peq = promptEquation(prompt);
     // mode "auto" so a 2D demo isn't penalized by a 3D hint (matches Python).
-    const scored = DEMOS.map((d) => [d, sceneScore(d, ptext, ptoks, "auto")]).filter((t) => t[1] > 0);
+    const scored = DEMOS.map((d) => [d, sceneScore(d, ptext, ptoks, "auto", peq)]).filter((t) => t[1] > 0);
     scored.sort((a, b) => b[1] - a[1]);
     return scored;
   }
