@@ -562,6 +562,9 @@
     el.equation.textContent = scene.equation || "No single equation — concept scene";
     el.summary.textContent = scene.summary;
     el.tag.textContent = scene.tag;
+    // The help card is self-explanatory on the canvas — hide the overlay pills
+    // (tag + status) so they don't clutter it with redundant chrome.
+    if (el.frame) el.frame.classList.toggle("bare", !!scene.browser_help);
     // 3D scenes are orbitable — surface that, since nothing else hints at it.
     if (el.orbitHint) el.orbitHint.hidden = scene.dimension !== "3D";
 

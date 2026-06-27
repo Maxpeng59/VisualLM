@@ -531,6 +531,9 @@ textarea:focus, input[type="text"]:focus {
   color: var(--muted);
 }
 #sceneTag { color: var(--info); font-weight: 500; }
+/* Bare canvas (the browser-edition help card): hide the status/tag pills — the
+ * card explains itself, so the overlay chrome is just redundant clutter. */
+.canvas-frame.bare .canvas-overlay { display: none; }
 .orbit-hint {
   position: absolute;
   /* Top-right, not bottom-right: the long hint text would otherwise extend
