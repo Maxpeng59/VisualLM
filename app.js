@@ -18,7 +18,7 @@
   /* Tutor text rendering                                           */
   /* ============================================================== */
   //
-  // The tutor (Ollama or Claude) sometimes ignores the "plain text" rule and
+  // The tutor (Claude/OpenAI/Gemini) sometimes ignores the "plain text" rule and
   // emits Markdown + LaTeX. Rather than rely on prompt discipline, we clean
   // it up here:
   //   1. HTML-escape first, so any literal <, >, & from the model stays text.
@@ -253,6 +253,11 @@
   /* AI-generated animation code in isolation.                      */
   /* ============================================================== */
 
+  // The app theme ("light"|"dark") lives on <html data-theme>; the canvas worker
+  // needs it too so the animation follows the toggle. Default to dark.
+  const currentTheme = () =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark";
+
   class SandboxRunner {
     constructor(frame) {
       this.frame = frame;
@@ -377,12 +382,12 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=23");
+      const worker = new Worker("./sandbox-worker.js?v=24");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
       worker.postMessage(
-        { type: "init", canvas: offscreen, width: d.width, height: d.height, dpr: d.dpr },
+        { type: "init", canvas: offscreen, width: d.width, height: d.height, dpr: d.dpr, theme: currentTheme() },
         [offscreen]
       );
     }
@@ -445,7 +450,7 @@
           this._spawn(); // kill the frozen worker and start a fresh one
           this._settle(false, new Error("The animation hung (possible infinite loop)."));
         }, 3000);
-        this.worker.postMessage({ type: "run", code, params: params || {}, resetTime: true });
+        this.worker.postMessage({ type: "run", code, params: params || {}, resetTime: true, theme: currentTheme() });
         if (this.paused) this.worker.postMessage({ type: "pause" });
         this.worker.postMessage({ type: "speed", value: this.speed });
       });
@@ -466,6 +471,10 @@
     /* Live-update demo parameters without recompiling the scene. */
     setParams(values) {
       if (this.worker) this.worker.postMessage({ type: "params", values: values || {} });
+    }
+    /* Push a light/dark theme switch to the running scene (live, no recompile). */
+    setTheme(theme) {
+      if (this.worker) this.worker.postMessage({ type: "theme", theme });
     }
     _resize() {
       if (!this.worker || !this.ready) return;
@@ -632,7 +641,6 @@
     claude: "Claude",
     openai: "ChatGPT",
     gemini: "Gemini",
-    ollama: "local model",
     library: "curated library",
     chemistry: "chemistry engine",
     solver: "step-by-step solver",
@@ -696,7 +704,7 @@
       el.topic.textContent = "Generation failed";
       el.summary.textContent = err.message;
       // Re-check which backend is alive — the failure often means the badge
-      // is now stale (Ollama died, Claude key expired, server restarted, etc.).
+      // is now stale (Claude key expired, server restarted, etc.).
       refreshStatus();
     } finally {
       stopElapsed();
@@ -737,26 +745,10 @@
     return String(Math.round(v * 100) / 100);
   }
 
-  function injectDemoStyles() {
-    if (document.getElementById("demoControlsStyle")) return;
-    const st = document.createElement("style");
-    st.id = "demoControlsStyle";
-    st.textContent =
-      ".demo-controls{margin:10px auto 0;width:92%;max-width:1100px;background:#16203a;border:1px solid #26314f;border-radius:12px;padding:12px 16px;box-sizing:border-box;}" +
-      ".demo-controls-head{font-size:12px;color:#9fb0d4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}" +
-      ".demo-params{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;}" +
-      ".demo-param{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 10px;}" +
-      ".demo-param-name{font-size:13px;color:#cfe0ff;}" +
-      ".demo-param-val{font:600 13px 'JetBrains Mono',ui-monospace,monospace;color:#7cc4ff;min-width:3ch;text-align:right;}" +
-      ".demo-param input[type=range]{grid-column:1 / -1;width:100%;accent-color:#7cc4ff;}";
-    document.head.appendChild(st);
-  }
-
   // Build the live slider panel for a demo scene. A non-demo scene (no params)
   // hides the panel. Moving a slider updates the worker's `P` global live —
   // no recompile — so the graph responds as you drag.
   function renderDemoControls(scene) {
-    injectDemoStyles();
     let dc = document.getElementById("demoControls");
     if (!dc) {
       dc = document.createElement("div");
@@ -774,7 +766,7 @@
     dc.innerHTML = "";
     const head = document.createElement("div");
     head.className = "demo-controls-head";
-    head.textContent = "Adjust the values — the graph updates live";
+    head.textContent = "Adjust the values — the visualization updates live";
     dc.appendChild(head);
     const grid = document.createElement("div");
     grid.className = "demo-params";
@@ -1105,20 +1097,18 @@
         el.statusBadge.textContent = "Gemini online";
         el.statusBadge.className = "status-pill ok";
         el.modelLabel.textContent = "Generator: " + (health.gemini.model || "gemini");
-      } else if (gen === "ollama") {
-        el.statusBadge.textContent = "Local model";
-        el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.ollama.selected_model || "ollama");
       } else if (gen === "browser") {
         // BROWSER EDITION: everything runs client-side; no server generator.
         el.statusBadge.textContent = "Browser edition";
         el.statusBadge.className = "status-pill ok";
         el.modelLabel.textContent = "Chemistry · interactive demos · step-by-step solver · runs in your browser";
       } else {
-        el.statusBadge.textContent = "No generator";
-        el.statusBadge.className = "status-pill error";
+        // No cloud key — the AI relies only on code, so the app still runs the
+        // built-in pure-code library (demos, chemistry, the step-by-step solver).
+        el.statusBadge.textContent = "Code-only";
+        el.statusBadge.className = "status-pill";
         el.modelLabel.textContent =
-          "Set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY or start Ollama";
+          "Demos, chemistry & solver run offline. Set ANTHROPIC_API_KEY for AI generation.";
       }
     } catch (err) {
       el.statusBadge.textContent = "Server offline";
@@ -1467,6 +1457,7 @@
       const current = document.documentElement.dataset.theme || "dark";
       const next = current === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = next;
+      runner.setTheme(next);
       syncThemeToggleLabel();
       try {
         localStorage.setItem(THEME_KEY, next);

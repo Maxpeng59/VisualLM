@@ -506,7 +506,7 @@
       "  for (let k = 0; k < offs.length; k++) {\n" +
       "    const o = offs[k];\n" +
       "    H.line(p1.x + ux * o, p1.y + uy * o, p2.x + ux * o, p2.y + uy * o,\n" +
-      "      { color: '#9aa3c0', width: 3 });\n" +
+      "      { color: H.colors.sub, width: 3 });\n" +
       "  }\n" +
       "}\n" +
       "for (let b = 0; b < MOL.bonds.length; b++) {\n" +
