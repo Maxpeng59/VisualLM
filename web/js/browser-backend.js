@@ -29,7 +29,7 @@
       ok: true,
       browser: { engine: "client-side", features: ["chemistry", "demos", "scenes", "balancing"] },
       claude: { available: false }, openai: { available: false },
-      gemini: { available: false }, ollama: { available: false },
+      gemini: { available: false },
     };
   }
 

@@ -110,8 +110,9 @@ def main() -> int:
     smoke = "--smoke" in sys.argv
 
     if not any(os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY")):
-        print("• No cloud API key found. VisualLM will try a local Ollama model, and")
-        print("  otherwise show a fallback. For the best animations, put")
+        print("• No cloud API key found — running in code-only mode. Chemistry,")
+        print("  reactions, the step-by-step solver, and the demo library all work")
+        print("  offline. For AI generation of free-form prompts, put")
         print("  ANTHROPIC_API_KEY=sk-ant-... in a .env file next to launch.py")
         print("  (copy .env.example to .env). See README for details.\n")
 

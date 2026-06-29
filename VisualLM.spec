@@ -8,7 +8,7 @@
 # static assets via main.py's BASE_DIR -> sys._MEIPASS. It opens a native
 # pywebview window if pywebview was importable at build time, else an app-style
 # browser window. To include Claude, `pip install anthropic` before building;
-# otherwise the bundle uses OpenAI / Gemini / Ollama (all stdlib HTTP).
+# otherwise the bundle uses OpenAI / Gemini, or the built-in pure-code library.
 from pathlib import Path
 
 # Static + data files the server reads at runtime, placed at the bundle root.

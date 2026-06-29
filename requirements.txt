@@ -1,5 +1,9 @@
-# VisualLM uses only the Python standard library to run the server.
-# The Anthropic SDK is optional but strongly recommended — it powers the
-# high-quality animation generation. Without it (and an API key) the app
-# falls back to a local Ollama model.
+# VisualLM runs its server on the Python standard library alone — the AI relies
+# only on code. The Anthropic SDK below is optional but recommended: with an
+# ANTHROPIC_API_KEY it generates animations via Claude. With NO key, the app
+# still works fully on its built-in pure-code library (interactive demos, 3D
+# chemistry, and the step-by-step solver). No local model app (Ollama) is used.
+#
+# For a true native desktop window, also install pywebview (see install.sh /
+# install.bat, or run: pip install pywebview).
 anthropic>=0.40.0

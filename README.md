@@ -15,7 +15,7 @@ VisualLM ships in two flavors of the same project:
 | Host | **GitHub Pages** (static) — instant, free, shareable link | Your machine, or any server host (Render, etc.) |
 | Chemistry: 3D molecules + equation balancing | ✅ | ✅ |
 | 333 interactive curriculum demos + 50 curated scenes | ✅ | ✅ |
-| Free-form AI generation (type *any* idea) | ❌ (needs a model + key) | ✅ (Claude ▸ ChatGPT ▸ Gemini ▸ Ollama) |
+| Free-form AI generation (type *any* idea) | ❌ (needs a model + key) | ✅ (Claude ▸ ChatGPT ▸ Gemini) |
 | AI tutor chat | ❌ | ✅ |
 
 The browser edition is a faithful client-side port: the chemistry engine and the
@@ -34,7 +34,7 @@ edition adds the open-ended AI generation that needs server-side keys.
 ```
 prompt ──▶ /api/visualize ──▶ AI writes scene code ──▶ sandbox renders it
                                       │                        │
-                     (Claude ▸ ChatGPT ▸ Gemini ▸ Ollama)      │
+                       (Claude ▸ ChatGPT ▸ Gemini)            │
                                                         error? └─▶ /api/repair ──┐
                                                                                   │
                                                        fixed code ◀───────────────┘
@@ -121,18 +121,23 @@ Generation tries providers in this order — the first one with a key wins:
 | **Claude** | `ANTHROPIC_API_KEY` (+ `pip install anthropic`) | Primary generator — best quality |
 | **ChatGPT** | `OPENAI_API_KEY` | Cloud fallback generator |
 | **Gemini** | `GEMINI_API_KEY` | Cloud fallback generator |
-| **Ollama** | run `ollama serve` locally | Offline fallback + default tutor |
 
-All cloud providers are called over plain REST — no extra SDKs required.
+All cloud providers are called over plain REST — no extra SDKs required. **The AI
+relies only on code — there is no local model app.** With **no key at all**,
+VisualLM still runs entirely on its built-in pure-code library: 3D chemistry,
+balanced reactions, the step-by-step solver, and every interactive demo work
+offline. A key only adds free-form "type any idea" generation.
 
 ## Run it (as an app)
 
 The easy way — after a one-time setup, **no terminal needed**:
 
-1. **Set a key (once).** Copy `.env.example` to `.env` and paste your key:
-   `ANTHROPIC_API_KEY=sk-ant-...`. For Claude also run `pip install -r requirements.txt`.
-   No cloud key? Install [Ollama](https://ollama.com) and `ollama pull qwen2.5:7b`
-   for a local fallback.
+1. **Install dependencies (once).** Run **`./install.sh`** (macOS/Linux) or
+   **`install.bat`** (Windows). It creates a `.venv` and downloads everything —
+   the Claude client and the native-window backend (pywebview). Then, optionally,
+   add a key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`. **No key? Skip it** —
+   chemistry, reactions, the solver, and the demos all run offline; a key only
+   adds free-form AI generation.
 2. **Launch it.**
    - **macOS:** double-click **`VisualLM.command`** in Finder (first time: right-click → Open to clear the macOS warning).
    - **Any OS:** `python3 launch.py`
@@ -156,9 +161,8 @@ The packaged app reads a `.env` placed next to `VisualLM.app` or in `~/.visuallm
 Equivalent to what the launcher does, if you'd rather drive it yourself:
 
 ```bash
-pip install -r requirements.txt          # only needed for Claude
-export ANTHROPIC_API_KEY=sk-ant-...      # and/or OPENAI_API_KEY / GEMINI_API_KEY
-ollama pull qwen2.5:7b                    # optional local fallback + tutor
+./install.sh                              # one-time: creates .venv + installs deps
+export ANTHROPIC_API_KEY=sk-ant-...       # optional — and/or OPENAI_API_KEY / GEMINI_API_KEY
 python3 main.py                           # then open http://127.0.0.1:4173
 ```
 
@@ -215,9 +219,12 @@ HTTP round-trips against every endpoint (with stubbed generators).
 
 ## Files
 
-- `main.py` — web server, the four AI bridges (Claude/OpenAI/Gemini/Ollama),
-  the validate→auto-fix→repair pipeline, library retrieval + cache, rate
-  limiting, and the system prompt that defines the rendering contract.
+- `main.py` — web server, the three cloud AI bridges (Claude/OpenAI/Gemini —
+  no local model app), the validate→auto-fix→repair pipeline, library retrieval
+  + cache, rate limiting, and the system prompt that defines the rendering
+  contract.
+- `install.sh` / `install.bat` — one-shot dependency installers (create a
+  `.venv`, download the Claude client + the pywebview native-window backend).
 - `sandbox-worker.js` — the sandboxed Web Worker that runs generated code on
   an OffscreenCanvas, the `H` helper library, and the software 3D pipeline.
 - `validate_scene.js` — headless server-side scene validator (hardened Node
@@ -256,7 +263,6 @@ When `VISUALLM_ACCESS_CODE` is set, all POST/DELETE endpoints require the
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-8`)
 - `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`) / `OPENAI_BASE_URL`
 - `GEMINI_API_KEY` / `GEMINI_MODEL` (default `gemini-2.0-flash`) / `GEMINI_BASE_URL`
-- `OLLAMA_URL` (default `http://127.0.0.1:11434`) / `OLLAMA_MODEL`
 - `VISUALLM_ACCESS_CODE` — require a shared code for generation (recommended
   on public deployments).
 - `VISUALLM_RATE_LIMIT` — requests/min per IP (default 20; 0 disables).

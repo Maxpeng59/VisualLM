@@ -7,7 +7,8 @@
 # Unlike make_app.sh (a lightweight wrapper that needs the repo + system Python),
 # this produces a standalone bundle that includes Python and all dependencies.
 # To bundle Claude support, `pip install anthropic` first; otherwise the app
-# uses OpenAI / Gemini / Ollama. For a true native window, `pip install pywebview`
+# uses OpenAI / Gemini, or the built-in pure-code library (no local model app).
+# For a true native window, `pip install pywebview`
 # before building; otherwise it opens an app-style browser window.
 #
 # macOS only (uses sips/iconutil for the icon). Output: dist/VisualLM.app

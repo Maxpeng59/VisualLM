@@ -131,7 +131,7 @@ textarea:focus, input[type="text"]:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 22px;
+  padding: 9px 20px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -185,9 +185,20 @@ textarea:focus, input[type="text"]:focus {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(260px, 340px);
-  gap: 14px;
-  padding: 14px 16px;
+  /* Narrower side columns ("examiner" + "type in") so the center canvas keeps
+   * its width while the whole row gets shorter — see the reduced stage height
+   * below. The goal is the full page (incl. the tutor) fitting in one viewport
+   * without zooming out. */
+  grid-template-columns: minmax(230px, 300px) minmax(0, 1fr) minmax(220px, 290px);
+  /* Cap the row height so the three cards stay equal-height AND the whole row
+   * fits within one viewport. Without this the tall "Explanation" card stretches
+   * the row to its full content height (~640px) and shoves the tutor off-screen.
+   * clamp = floor 300px / preferred 44vh / ceiling 460px: fits a 768px-tall
+   * laptop, never lets the canvas balloon on a huge monitor. The left card
+   * scrolls internally past the cap. */
+  grid-template-rows: clamp(300px, 44vh, 460px);
+  gap: 12px;
+  padding: 10px 16px;
   min-height: 0;
   align-items: stretch;
 }
@@ -258,12 +269,12 @@ textarea:focus, input[type="text"]:focus {
 }
 
 .tab-panel {
-  padding: 18px;
+  padding: 16px;
   overflow-y: auto;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 .tab-panel[hidden] { display: none; }
 
@@ -482,9 +493,13 @@ textarea:focus, input[type="text"]:focus {
 /* ============================================================== */
 
 .stage-panel {
-  padding: 14px;
+  padding: 12px;
   background: var(--panel);
-  min-height: 70vh;
+  /* The row height is governed by the workspace's grid-template-rows clamp
+   * (was a 70vh min here, which pushed the tutor ~300px below the fold). Floor
+   * at 0 and hide overflow so the canvas always fills the capped row exactly. */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .canvas-frame {
@@ -494,7 +509,9 @@ textarea:focus, input[type="text"]:focus {
   overflow: hidden;
   background: #050507;
   border: 1px solid var(--border);
-  min-height: 520px;
+  /* Soft floor only — the flex:1 fills the capped stage row; the low floor keeps
+   * the canvas from ever overflowing the row on short viewports. */
+  min-height: 200px;
   display: flex;
 }
 
@@ -557,19 +574,140 @@ textarea:focus, input[type="text"]:focus {
 #sceneConfidence[data-tone="ok"]      { color: var(--good); }
 #sceneConfidence[data-tone="warn"]    { color: var(--warn); }
 
+/* Light theme: the animation canvas follows the app toggle. The scene itself
+ * repaints in the light palette (sandbox-worker.js); this sets the frame's
+ * fallback fill (shown for a frame before the scene paints) and flips the
+ * overlay pills from a dark wash to a light one so their text stays readable. */
+[data-theme="light"] .canvas-frame { background: #eef1f7; }
+[data-theme="light"] .canvas-overlay span,
+[data-theme="light"] .orbit-hint { background: rgba(255, 255, 255, 0.82); }
+
+/* ============================================================== */
+/* Interactive demo parameter controls ("fill in the values")     */
+/* ============================================================== */
+/* Lives in the stylesheet (not a JS-injected <style>) because the CSP forbids
+ * inline styles — injected <style> blocks were silently dropped, leaving these
+ * controls unstyled. Theme-aware via CSS variables. */
+
+.demo-controls {
+  margin: 12px auto 0;
+  width: 92%;
+  max-width: 1100px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  box-sizing: border-box;
+}
+.demo-controls[hidden] { display: none; }
+
+.demo-controls-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 14px;
+}
+.demo-controls-head::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--info);
+  flex: none;
+}
+
+.demo-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 11px 28px;
+}
+/* One compact row per parameter: name | slider | value chip. Keeps the panel
+ * short enough to sit inside the capped stage without clipping. */
+.demo-param {
+  display: grid;
+  grid-template-columns: minmax(74px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.demo-param-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.demo-param-val {
+  justify-self: end;
+  min-width: 3ch;
+  text-align: right;
+  font: 600 12.5px 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+  border-radius: 6px;
+  padding: 1px 8px;
+}
+
+.demo-param input[type="range"] {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.demo-param input[type="range"]:focus-visible { outline: none; }
+.demo-param input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-2);
+}
+.demo-param input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 15px;
+  width: 15px;
+  border-radius: 50%;
+  background: var(--info);
+  border: 2px solid var(--panel);
+  margin-top: -6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transition: transform 100ms ease;
+}
+.demo-param input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.18); }
+.demo-param input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-2);
+}
+.demo-param input[type="range"]::-moz-range-thumb {
+  height: 15px;
+  width: 15px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--info);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
 /* ============================================================== */
 /* RIGHT — prompt                                                 */
 /* ============================================================== */
 
 .right-panel {
-  padding: 18px;
-  gap: 14px;
+  padding: 16px;
+  gap: 12px;
   display: flex;
   flex-direction: column;
 }
 .right-panel .panel-header { padding: 0; }
 .right-panel textarea#promptInput {
-  min-height: 160px;
+  min-height: 120px;
   font-size: 13.5px;
 }
 
@@ -661,8 +799,8 @@ textarea:focus, input[type="text"]:focus {
 
 .tutor-panel {
   margin: 0 16px 16px;
-  padding: 18px;
-  gap: 14px;
+  padding: 14px 18px;
+  gap: 10px;
 }
 
 .tutor-header h2 {
@@ -687,8 +825,8 @@ textarea:focus, input[type="text"]:focus {
 }
 
 .chat-messages {
-  min-height: 220px;
-  max-height: 420px;
+  min-height: 120px;
+  max-height: 300px;
   overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -753,7 +891,7 @@ textarea:focus, input[type="text"]:focus {
 .chat-body br + br { display: none; }
 
 .chat-composer { display: grid; gap: 10px; }
-#chatInput { min-height: 90px; }
+#chatInput { min-height: 64px; }
 .chat-actions {
   display: flex;
   align-items: center;
@@ -800,6 +938,9 @@ textarea:focus, input[type="text"]:focus {
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 1fr;
+    /* Stacked single column — let each card size to its own content again;
+     * the desktop row-height cap would otherwise squeeze only the first card. */
+    grid-template-rows: auto;
   }
   /* On mobile, put the PRIMARY action (the prompt) first, then the canvas, then
    * the explanation — otherwise the prompt box sits two screens below a wall of

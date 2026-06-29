@@ -45,15 +45,6 @@ MAX_CONTEXT_PER_RESOURCE = 18_000     # chars used per generation/chat turn
 # thread on `rfile.read(huge_n)` (which would either OOM or wait forever).
 MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
 
-# --- Ollama (local) is used for the tutor chat and as an offline fallback. ---
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-PREFERRED_MODELS = (
-    "qwen2.5:7b",
-    "llama3.2",
-    "llama3.1:8b",
-    "phi4-mini",
-)
-
 # --- Claude (cloud) is the primary brain for generating animation code. ---
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
 # Generation depth/latency lever. Opus 4.8 effort levels: low|medium|high|xhigh|max.
@@ -80,8 +71,8 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 # Abuse protection (the app may be exposed to the public internet)      #
 # ===================================================================== #
 #
-# Every /api POST burns either local compute (Ollama) or the operator's paid
-# API credits (Claude/OpenAI/Gemini), so when published we (a) rate-limit per
+# Every /api POST can burn the operator's paid API credits (Claude/OpenAI/
+# Gemini), so when published we (a) rate-limit per
 # client IP with a sliding 60 s window and (b) optionally require a shared
 # access code (VISUALLM_ACCESS_CODE) so only people you invite can generate.
 
@@ -165,59 +156,11 @@ def send_json(handler: SimpleHTTPRequestHandler, status: HTTPStatus, payload: di
 
 
 # ===================================================================== #
-# Ollama bridge                                                         #
-# ===================================================================== #
-
-
-def ollama_request(path: str, payload: dict | None = None, timeout: float = 60.0) -> dict:
-    body = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"{OLLAMA_URL}{path}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST" if body is not None else "GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        details = error.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(details or f"Ollama returned HTTP {error.code}.") from error
-    except urllib.error.URLError as error:
-        reason = getattr(error, "reason", error)
-        raise RuntimeError(f"Could not reach Ollama at {OLLAMA_URL}. {reason}") from error
-
-
-def fetch_ollama_models() -> list[dict]:
-    response = ollama_request("/api/tags", timeout=10.0)
-    return response.get("models", [])
-
-
-def choose_ollama_model(models: list[dict]) -> str:
-    configured = os.environ.get("OLLAMA_MODEL", "").strip()
-    if configured:
-        return configured
-    available = [m.get("name", "") for m in models]
-    for candidate in PREFERRED_MODELS:
-        if candidate in available:
-            return candidate
-    return available[0] if available else PREFERRED_MODELS[0]
-
-
-def ollama_available() -> tuple[bool, str | None]:
-    try:
-        fetch_ollama_models()
-        return True, None
-    except RuntimeError as error:
-        return False, str(error)
-
-
-# ===================================================================== #
 # Resource store (uploaded reference material)                          #
 # ===================================================================== #
 #
 # Single-user, in-memory. Files are kept as text so both the generator
-# (Claude) and the tutor (Ollama/Claude) can ground their output in them.
+# (Claude) and the tutor (Claude/OpenAI/Gemini) can ground their output in them.
 # Binary files are rejected; users upload notes, problem sets, lecture
 # excerpts, code, datasets — anything text-ish.
 
@@ -799,9 +742,9 @@ def repair_with_claude(prompt: str, code: str, error: str) -> dict:
     return claude_call_scene([{"type": "text", "text": user_text}])
 
 
-# --- Ollama fallback generation (best-effort; lower quality than Claude). ---
+# --- Shared strict-JSON scene prompt for the non-Claude cloud generators. ---
 
-OLLAMA_SCENE_PROMPT = (
+JSON_SCENE_PROMPT = (
     SCENE_SYSTEM_PROMPT
     + "\n\nReturn STRICT JSON only with keys: title, tag, dimension, equation, "
     "summary, bullets (array of 3 strings), student_prompts (array of 3 strings), "
@@ -820,8 +763,8 @@ def _extract_json_object(raw_text: str) -> dict:
     # Brace-balanced walk: find each complete top-level {...} segment and try
     # to parse it. Handles "prose {a} more {b}" (find+rfind would have sliced
     # both objects into one unparseable blob) and braces inside JSON string
-    # values. Raises json.JSONDecodeError so callers (e.g. generate_with_ollama)
-    # can decide whether to retry.
+    # values. Raises json.JSONDecodeError so callers (e.g. the OpenAI/Gemini
+    # generators) can decide whether to retry.
     depth = 0
     start = -1
     in_str = False
@@ -853,71 +796,6 @@ def _extract_json_object(raw_text: str) -> dict:
                         pass  # try the next balanced segment
                     start = -1
     raise json.JSONDecodeError("No parseable JSON object in model output", text, 0)
-
-
-def generate_with_ollama(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
-    models = fetch_ollama_models()
-    model_name = choose_ollama_model(models)
-    if fix:
-        user = (
-            "Your animation code threw an error. Fix it and return the full scene "
-            "as strict JSON.\n\nRequest:\n" + prompt + "\n\nError:\n" + fix["error"]
-            + "\n\nHow to fix it:\n" + _repair_hint(fix["error"])
-            + "\n\nBroken code:\n" + fix["code"]
-        )
-    else:
-        user = (
-            "Create a STEM visualization for this request:\n\n"
-            + prompt
-            + "\n\n"
-            + _mode_hint(preferred_mode)
-        )
-    resources = resources_context_block()
-    if resources:
-        user += "\n\n" + resources
-    payload = {
-        "model": model_name,
-        "stream": False,
-        "format": "json",
-        "messages": [
-            {"role": "system", "content": OLLAMA_SCENE_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        "options": {"temperature": 0.2},
-        # Tell Ollama to keep the model resident for a while after the
-        # call returns. The next visualize/repair won't pay the cold-load.
-        "keep_alive": "30m",
-    }
-    # Retry once on JSON parse failure: `format: json` produces valid JSON
-    # most of the time, but sampling occasionally emits unterminated strings
-    # / unescaped quotes that break json.loads. A single re-sample at the
-    # same temperature usually succeeds and is much cheaper than surfacing
-    # a hard "Could not generate" to the user.
-    last_parse_err: json.JSONDecodeError | None = None
-    for attempt in range(2):
-        response = ollama_request(
-            "/api/chat",
-            payload=payload,
-            # Generous timeout: a cold load of a 7B model + a complex JSON-mode
-            # generation can take well over 2 minutes the first time. Subsequent
-            # calls run in 10-30s.
-            timeout=420.0,
-        )
-        content = response.get("message", {}).get("content")
-        if not isinstance(content, str):
-            raise RuntimeError("Ollama returned no visualization.")
-        try:
-            plan = _extract_json_object(content)
-        except json.JSONDecodeError as err:
-            last_parse_err = err
-            continue
-        plan["model"] = model_name
-        plan["engine"] = "ollama"
-        return plan
-    # Both attempts produced unparseable JSON — surface the latest parse error.
-    raise RuntimeError(
-        f"Ollama produced invalid JSON twice in a row: {last_parse_err}"
-    )
 
 
 # ===================================================================== #
@@ -1040,7 +918,7 @@ def _scene_user_text(prompt: str, preferred_mode: str, fix: dict | None) -> str:
 
 def generate_with_openai(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
     raw = _openai_chat(
-        OLLAMA_SCENE_PROMPT,
+        JSON_SCENE_PROMPT,
         [{"role": "user", "content": _scene_user_text(prompt, preferred_mode, fix)}],
         json_mode=True,
     )
@@ -1052,7 +930,7 @@ def generate_with_openai(prompt: str, preferred_mode: str, fix: dict | None = No
 
 def generate_with_gemini(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
     raw = _gemini_generate(
-        OLLAMA_SCENE_PROMPT,
+        JSON_SCENE_PROMPT,
         [{"role": "user", "content": _scene_user_text(prompt, preferred_mode, fix)}],
         json_mode=True,
     )
@@ -2078,18 +1956,6 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
             return scene
         except Exception as error:  # noqa: BLE001
             errors.append(f"{label}: {error}")
-    try:
-        scene = _try_generate(
-            lambda p, m: generate_with_ollama(p, m),
-            prompt,
-            preferred_mode,
-            "Ollama",
-            max_attempts=3,
-        )
-        scene_cache_put(prompt, preferred_mode, scene)
-        return scene
-    except Exception as error:  # noqa: BLE001
-        errors.append(f"Ollama: {error}")
 
     # 4. Every generator failed. A RELEVANT curated scene beats a dead canvas —
     #    but a wrong-topic one is worse than an honest placeholder, so require a
@@ -2123,17 +1989,29 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
             "enable a stronger model (ANTHROPIC_API_KEY / OPENAI_API_KEY / "
             "GEMINI_API_KEY) for more reliable results.",
         )
+    # No cloud key configured at all (errors is empty): the app relies only on
+    # code. Chemistry, reactions, the solver, and the demo library are handled
+    # above with no model — only a genuinely novel free-form prompt reaches here.
+    # Show the friendly placeholder (not a hard error) and point the user at what
+    # works offline plus how to enable AI generation.
+    if not errors:
+        return _fallback_scene(
+            prompt,
+            "No AI model is configured, so free-form prompts can't be generated. "
+            "Try a formula (CH4), a reaction (2H2 + O2 -> 2H2O), or a topic "
+            "(projectile motion) — these run with no key. For custom prompts, set "
+            "ANTHROPIC_API_KEY (and `pip install anthropic`) to enable Claude.",
+        )
     if any("timed out" in e.lower() or "timeout" in e.lower() for e in errors):
         hint = (
-            "The local model probably hit a cold-start timeout. Try again — "
-            "the model is loaded now and the next call will be much faster."
+            "The model request timed out. Try again, or simplify the prompt — "
+            "complex scenes take longer to generate."
         )
-    elif any("connection" in e.lower() or "could not reach" in e.lower() for e in errors):
-        hint = "Start Ollama (`ollama serve`) or set ANTHROPIC_API_KEY for Claude."
     else:
         hint = (
-            "Set ANTHROPIC_API_KEY (and `pip install anthropic`), "
-            "OPENAI_API_KEY, or GEMINI_API_KEY — or run Ollama locally."
+            "Set ANTHROPIC_API_KEY (and `pip install anthropic`) for Claude, or "
+            "OPENAI_API_KEY / GEMINI_API_KEY. With no key, VisualLM still runs the "
+            "built-in pure-code library (demos, chemistry, step-by-step solver)."
         )
     raise RuntimeError(f"Generator failed ({detail}). {hint}")
 
@@ -2161,18 +2039,11 @@ def repair_visualization(prompt: str, code: str, error: str, where: str = "") ->
             )
         except Exception as e:  # noqa: BLE001
             errors.append(f"{label}: {e}")
-    try:
-        return normalize_scene(
-            generate_with_ollama(prompt, "auto", fix={"code": code, "error": error_ctx}),
-            prompt,
-        )
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"Ollama: {e}")
     raise RuntimeError("Repair failed. " + " | ".join(errors))
 
 
 # ===================================================================== #
-# Tutor chat (Ollama primary, Claude fallback)                          #
+# Tutor chat (Claude / OpenAI / Gemini, cloud only)                     #
 # ===================================================================== #
 
 
@@ -2275,30 +2146,6 @@ def build_tutor_system_prompt(viz: dict) -> str:
     return base
 
 
-def chat_with_ollama(question: str, viz: dict, history: list[dict]) -> dict:
-    models = fetch_ollama_models()
-    model_name = choose_ollama_model(models)
-    messages = [{"role": "system", "content": build_tutor_system_prompt(viz)}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": question})
-    response = ollama_request(
-        "/api/chat",
-        payload={
-            "model": model_name,
-            "stream": False,
-            "messages": messages,
-            "options": {"temperature": 0.3},
-            "keep_alive": "30m",
-        },
-        timeout=240.0,
-    )
-    raw = response.get("message", {}).get("content")
-    answer = raw.strip() if isinstance(raw, str) else ""
-    if not answer:
-        raise RuntimeError("Ollama returned an empty response.")
-    return {"answer": answer, "model": model_name, "engine": "ollama"}
-
-
 def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
     client = anthropic_client()
     if client is None:
@@ -2335,14 +2182,6 @@ def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
 
 def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
     errors = []
-    # Previously did ollama_available() (probe /api/tags) THEN chat_with_ollama()
-    # (which also fetches /api/tags) — same duplicate-call issue as Bug #45.
-    # Trying chat_with_ollama directly fails just as fast on a refused
-    # connection because fetch_ollama_models has its own 10 s timeout.
-    try:
-        return chat_with_ollama(question, viz, history)
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"Ollama: {e}")
     if claude_available()["available"]:
         try:
             return chat_with_claude(question, viz, history)
@@ -2372,8 +2211,8 @@ def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
         # No backend is configured. Give the same actionable hint that
         # plan_visualization gives, otherwise the user sees a dead end.
         raise RuntimeError(
-            "No tutor backend is available. Start Ollama (`ollama serve`) "
-            "or set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY."
+            "No tutor backend is available. Set ANTHROPIC_API_KEY "
+            "/ OPENAI_API_KEY / GEMINI_API_KEY to enable the AI tutor."
         )
     raise RuntimeError("Tutor unavailable. " + " | ".join(errors))
 
@@ -2384,20 +2223,10 @@ def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
 
 
 def get_health() -> dict:
-    # Single Ollama probe — was making 2 HTTP calls per request: ollama_available()
-    # calls fetch_ollama_models() internally, then we called it AGAIN to populate
-    # the model list. With Bug #19's refresh-on-error this fired often enough to
-    # matter. Now we fetch once and derive availability from success/failure.
-    ollama_status = {"available": False, "url": OLLAMA_URL, "error": None}
-    try:
-        models = fetch_ollama_models()
-        ollama_status["available"] = True
-        ollama_status["selected_model"] = choose_ollama_model(models)
-        ollama_status["models"] = [m.get("name") for m in models]
-    except RuntimeError as error:
-        ollama_status["error"] = str(error)
-    # claude_available() does no I/O (env var + import probe) but was still
-    # called twice — once for the dict, once for the generator switch.
+    # The AI relies only on code: a cloud key enables Claude/OpenAI/Gemini, and
+    # with no key the app serves the built-in pure-code library (demos, chemistry,
+    # the step-by-step solver). No local model app (Ollama) is probed or required,
+    # so /api/health does no network I/O — just an env-var + import probe.
     claude_info = claude_available()
     openai_info = openai_available()
     gemini_info = gemini_available()
@@ -2407,12 +2236,9 @@ def get_health() -> dict:
         generator = "openai"
     elif gemini_info["available"]:
         generator = "gemini"
-    elif ollama_status["available"]:
-        generator = "ollama"
     else:
         generator = "none"
     return {
-        "ollama": ollama_status,
         "claude": claude_info,
         "openai": openai_info,
         "gemini": gemini_info,
@@ -2428,7 +2254,7 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
     # Cap per-request socket reads so a malicious / hung client that declares
     # Content-Length: N but only sends part of it can't pin a worker thread
     # forever on rfile.read(N). 30 s is far more than any legitimate body
-    # (the slow path is a Claude/Ollama call, which happens server-side after
+    # (the slow path is a cloud model call, which happens server-side after
     # the body is fully read). Without this, ThreadingHTTPServer's default
     # socket timeout is None — the thread hangs until TCP keepalive expires.
     timeout = 30

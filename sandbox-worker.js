@@ -91,31 +91,39 @@ function post(msg) {
 
 const TAU = Math.PI * 2;
 
-const COLORS = {
-  bg: "#0e1525",
-  panel: "#16203a",
-  ink: "#eef2ff",
-  sub: "#9fb0d4",
-  grid: "#26314f",
-  axis: "#566087",
-  accent: "#7cc4ff",
-  accent2: "#f4a259",
-  good: "#67e8b0",
-  warn: "#ff8aa0",
-  violet: "#c4a7ff",
-  yellow: "#ffe08a",
+// Two palettes so the animation canvas can follow the app's light/dark toggle.
+// COLORS and PALETTE are mutated IN PLACE by applyTheme() — their object/array
+// identity never changes, so `H.colors`/`H.palette` (and any running scene that
+// reads them each frame) pick up a theme switch live, with no recompile.
+const THEMES = {
+  dark: {
+    bg: "#0e1525", bgTop: "#101a31", panel: "#16203a",
+    ink: "#eef2ff", sub: "#9fb0d4", grid: "#26314f", axis: "#566087",
+    accent: "#7cc4ff", accent2: "#f4a259", good: "#67e8b0", warn: "#ff8aa0",
+    violet: "#c4a7ff", yellow: "#ffe08a", quadEdge: "rgba(10,14,30,0.35)",
+    palette: ["#7cc4ff", "#f4a259", "#67e8b0", "#c4a7ff", "#ff8aa0", "#ffe08a", "#5eead4", "#fca5f1"],
+  },
+  light: {
+    bg: "#f4f6fb", bgTop: "#ffffff", panel: "#e7ecf6",
+    ink: "#16203a", sub: "#4a5578", grid: "#d4dbea", axis: "#9aa6c4",
+    accent: "#2f7fd1", accent2: "#d9772b", good: "#1aa06a", warn: "#e0506a",
+    violet: "#8b5cf6", yellow: "#c79214", quadEdge: "rgba(40,50,80,0.22)",
+    palette: ["#2f7fd1", "#d9772b", "#1aa06a", "#8b5cf6", "#e0506a", "#c79214", "#0e9aa7", "#d83f87"],
+  },
 };
 
-const PALETTE = [
-  "#7cc4ff",
-  "#f4a259",
-  "#67e8b0",
-  "#c4a7ff",
-  "#ff8aa0",
-  "#ffe08a",
-  "#5eead4",
-  "#fca5f1",
-];
+const COLORS = {};
+const PALETTE = [];
+let THEME_NAME = "dark";
+function applyTheme(name) {
+  THEME_NAME = name === "light" ? "light" : "dark";
+  const t = THEMES[THEME_NAME];
+  for (const k in COLORS) delete COLORS[k];
+  for (const k in t) if (k !== "palette") COLORS[k] = t[k];
+  PALETTE.length = 0;
+  for (const c of t.palette) PALETTE.push(c);
+}
+applyTheme("dark");
 
 function clamp(x, lo, hi) {
   return x < lo ? lo : x > hi ? hi : x;
@@ -138,6 +146,9 @@ function makeHelpers() {
     PI: Math.PI,
     colors: COLORS,
     palette: PALETTE,
+    get theme() {
+      return THEME_NAME;
+    },
     clamp,
     lerp,
     map,
@@ -156,7 +167,7 @@ function makeHelpers() {
     },
     background(top, bottom) {
       const g = ctx.createLinearGradient(0, 0, 0, logicalH);
-      g.addColorStop(0, top || "#101a31");
+      g.addColorStop(0, top || COLORS.bgTop);
       g.addColorStop(1, bottom || COLORS.bg);
       ctx.save();
       ctx.fillStyle = g;
@@ -828,7 +839,7 @@ function drawShadedQuads(cam, quads, opts) {
     ctx.fillStyle = fill;
     ctx.fill();
     if (wire) {
-      ctx.strokeStyle = "rgba(10, 14, 30, 0.35)";
+      ctx.strokeStyle = COLORS.quadEdge;
       ctx.lineWidth = 0.7;
       ctx.stroke();
     }
@@ -1012,6 +1023,7 @@ self.onmessage = (e) => {
       canvas.height = Math.round(logicalH * dpr);
       ctx = canvas.getContext("2d");
       ctx.scale(dpr, dpr);
+      applyTheme(m.theme || THEME_NAME);
       HELP = wrapHelpers(makeHelpers());
       seedConvenienceGlobals();
       post({ type: "ready" });
@@ -1035,6 +1047,7 @@ self.onmessage = (e) => {
     case "run": {
       try {
         curParams = m.params && typeof m.params === "object" ? m.params : {};
+        if (m.theme) applyTheme(m.theme);
         const fn = compile(m.code);
         sceneFn = fn;
         lastCode = typeof m.code === "string" ? m.code : "";
@@ -1101,6 +1114,11 @@ self.onmessage = (e) => {
       orbit.yaw = 0;
       orbit.pitch = 0;
       orbit.zoom = 1;
+      break;
+    case "theme":
+      // Live theme switch from the main thread. Mutates COLORS/PALETTE in place
+      // so the running scene redraws in the new palette next frame — no recompile.
+      if (m.theme) applyTheme(m.theme);
       break;
     case "stop":
       running = false;
