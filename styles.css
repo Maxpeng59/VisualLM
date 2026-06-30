@@ -75,7 +75,15 @@ html, body {
 }
 
 body {
-  min-height: 100vh;
+  /* App-shell: a fixed-height flex column. The top workspace and the resizable
+   * AI Tutor split the viewport; each region scrolls internally instead of the
+   * whole page scrolling. Mobile reverts to a normal scrolling stack (see the
+   * max-width:900px block) so nothing is ever trapped off-screen. */
+  height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 h1, h2, h3, h4 {
@@ -128,6 +136,7 @@ textarea:focus, input[type="text"]:focus {
 /* ============================================================== */
 
 .topbar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -190,16 +199,14 @@ textarea:focus, input[type="text"]:focus {
    * below. The goal is the full page (incl. the tutor) fitting in one viewport
    * without zooming out. */
   grid-template-columns: minmax(230px, 300px) minmax(0, 1fr) minmax(220px, 290px);
-  /* Cap the row height so the three cards stay equal-height AND the whole row
-   * fits within one viewport. Without this the tall "Explanation" card stretches
-   * the row to its full content height (~640px) and shoves the tutor off-screen.
-   * clamp = floor 300px / preferred 44vh / ceiling 460px: fits a 768px-tall
-   * laptop, never lets the canvas balloon on a huge monitor. The left card
-   * scrolls internally past the cap. */
-  grid-template-rows: clamp(300px, 44vh, 460px);
+  /* The top "self-adapts": as a flex:1 region it fills whatever height the
+   * app-shell leaves above the resizable tutor. The single grid row fills that
+   * height; the three cards stay equal-height and scroll internally past it. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
-  padding: 10px 16px;
+  padding: 10px 16px 0;
   min-height: 0;
+  flex: 1 1 0;
   align-items: stretch;
 }
 
@@ -509,9 +516,10 @@ textarea:focus, input[type="text"]:focus {
   overflow: hidden;
   background: #050507;
   border: 1px solid var(--border);
-  /* Soft floor only — the flex:1 fills the capped stage row; the low floor keeps
-   * the canvas from ever overflowing the row on short viewports. */
-  min-height: 200px;
+  /* No floor — flex:1 fills the stage row, and shrinks to make room for the demo
+   * parameter panel below it so the sliders are never clipped when the top is
+   * dragged short. */
+  min-height: 0;
   display: flex;
 }
 
@@ -585,9 +593,9 @@ textarea:focus, input[type="text"]:focus {
 /* ============================================================== */
 /* Interactive demo parameter controls ("fill in the values")     */
 /* ============================================================== */
-/* Lives in the stylesheet (not a JS-injected <style>) because the CSP forbids
- * inline styles — injected <style> blocks were silently dropped, leaving these
- * controls unstyled. Theme-aware via CSS variables. */
+/* Lives in the stylesheet (not a JS-injected <style>) because the browser
+ * edition's CSP forbids inline styles — injected <style> blocks were silently
+ * dropped, leaving these controls unstyled. Theme-aware via CSS variables. */
 
 .demo-controls {
   margin: 12px auto 0;
@@ -704,6 +712,8 @@ textarea:focus, input[type="text"]:focus {
   gap: 12px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
 }
 .right-panel .panel-header { padding: 0; }
 .right-panel textarea#promptInput {
@@ -794,13 +804,46 @@ textarea:focus, input[type="text"]:focus {
 }
 
 /* ============================================================== */
+/* Resizer — drag to stretch / shrink the AI Tutor                 */
+/* ============================================================== */
+
+.app-resizer {
+  flex: none;
+  height: 14px;
+  margin: 2px 16px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  touch-action: none;          /* let pointer drags work on touch */
+}
+.app-resizer::before {
+  content: "";
+  width: 48px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-2);
+  transition: background 120ms ease, width 120ms ease;
+}
+.app-resizer:hover::before,
+.app-resizer:focus-visible::before { background: var(--subtle); width: 66px; }
+.app-resizer:focus-visible { outline: none; }
+.app-resizer.dragging::before { background: var(--info); width: 66px; }
+
+/* ============================================================== */
 /* Tutor                                                          */
 /* ============================================================== */
 
 .tutor-panel {
-  margin: 0 16px 16px;
+  /* User-resizable height via the drag handle above (--tutor-h is set by the JS
+   * and persisted). The clamp keeps it usable and always reserves room for the
+   * self-adapting top, even before the JS runs. */
+  flex: none;
+  height: clamp(150px, var(--tutor-h, 300px), calc(100vh - 300px));
+  margin: 0 16px 14px;
   padding: 14px 18px;
   gap: 10px;
+  overflow: hidden;
 }
 
 .tutor-header h2 {
@@ -816,17 +859,22 @@ textarea:focus, input[type="text"]:focus {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(260px, 320px);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .chat-column {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .chat-messages {
-  min-height: 120px;
-  max-height: 300px;
+  /* Fills the resizable tutor height and scrolls; the composer sits below it. */
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -907,6 +955,9 @@ textarea:focus, input[type="text"]:focus {
   padding: 14px;
   display: grid;
   gap: 10px;
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
 }
 .suggestion-list { display: grid; gap: 6px; }
 .suggestion-chip {
@@ -936,19 +987,32 @@ textarea:focus, input[type="text"]:focus {
 /* ============================================================== */
 
 @media (max-width: 900px) {
+  /* Revert the app-shell: on a phone a fixed 100vh split is cramped, so go back
+   * to a normal scrolling page where every stacked card is fully reachable — no
+   * trapped overflow. The resizer is meaningless when stacked, so hide it. */
+  body { height: auto; min-height: 100vh; display: block; overflow: visible; }
+  .app-resizer { display: none; }
+
   .workspace {
     grid-template-columns: 1fr;
     /* Stacked single column — let each card size to its own content again;
-     * the desktop row-height cap would otherwise squeeze only the first card. */
+     * the desktop row-fill would otherwise squeeze only the first card. */
     grid-template-rows: auto;
+    flex: none;
+    padding: 10px 16px;
   }
   /* On mobile, put the PRIMARY action (the prompt) first, then the canvas, then
    * the explanation — otherwise the prompt box sits two screens below a wall of
    * explanation text and a first-time user can't find where to type. */
-  .right-panel { order: 1; }
+  .right-panel { order: 1; overflow: visible; }
   .stage-panel { order: 2; min-height: 50vh; }
   .left-panel  { order: 3; }
-  .tutor-grid { grid-template-columns: 1fr; }
+
+  .tutor-panel { height: auto; flex: none; overflow: visible; margin: 0 16px 16px; }
+  .tutor-grid { grid-template-columns: 1fr; flex: none; align-items: start; }
+  .chat-column { display: grid; }
+  .chat-messages { flex: none; min-height: 200px; max-height: 60vh; }
+  .chat-sidebar { overflow: visible; }
 }
 
 /* ============================================================== */

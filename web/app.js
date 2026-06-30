@@ -1468,6 +1468,87 @@
   }
 
   /* ============================================================== */
+  /* Resizable AI Tutor — drag the handle to stretch / shrink it.   */
+  /* The top workspace self-adapts (it's a flex:1 region), and the  */
+  /* chosen height is persisted across sessions. Setting a CSS var  */
+  /* never triggers layout reflow events, so there is no resize     */
+  /* feedback loop / stack overflow here.                           */
+  /* ============================================================== */
+
+  (function setupTutorResizer() {
+    const resizer = $("appResizer");
+    if (!resizer) return;
+    const root = document.documentElement;
+    const KEY = "visuallm-tutor-h";
+    const MIN = 150;
+    const RESERVE = 300; // px always kept for the top workspace + chrome
+    const maxH = () => Math.max(MIN, window.innerHeight - RESERVE);
+    const clampH = (h) => Math.min(maxH(), Math.max(MIN, h));
+    const apply = (h) => root.style.setProperty("--tutor-h", clampH(h) + "px");
+    const current = () =>
+      parseFloat(getComputedStyle(root).getPropertyValue("--tutor-h")) ||
+      Math.min(maxH(), 300);
+    const save = () => {
+      try {
+        localStorage.setItem(KEY, String(Math.round(current())));
+      } catch (e) {
+        /* private mode — non-fatal */
+      }
+    };
+
+    // Re-clamp any restored value to the live viewport (the head bootstrap set
+    // it pre-paint to avoid a flash).
+    const saved = parseFloat(localStorage.getItem(KEY));
+    if (!isNaN(saved)) apply(saved);
+
+    let dragging = false;
+    resizer.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      resizer.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      try {
+        resizer.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      e.preventDefault();
+    });
+    resizer.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      // The tutor's bottom sits ~14px above the viewport bottom (its margin);
+      // its top tracks the pointer. So height = (viewport bottom) − pointerY.
+      apply(window.innerHeight - e.clientY - 14);
+    });
+    const stop = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.style.userSelect = "";
+      try {
+        resizer.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      save();
+    };
+    resizer.addEventListener("pointerup", stop);
+    resizer.addEventListener("pointercancel", stop);
+
+    // Keyboard a11y: arrows nudge the size when the handle is focused.
+    resizer.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 48 : 16;
+      if (e.key === "ArrowUp") {
+        apply(current() + step);
+        save();
+        e.preventDefault();
+      } else if (e.key === "ArrowDown") {
+        apply(current() - step);
+        save();
+        e.preventDefault();
+      }
+    });
+
+    // Keep the tutor within bounds when the window itself is resized.
+    window.addEventListener("resize", () => apply(current()));
+  })();
+
+  /* ============================================================== */
   /* Boot                                                           */
   /* ============================================================== */
 
