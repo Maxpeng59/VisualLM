@@ -32,7 +32,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=20" />
+    <link rel="stylesheet" href="./styles.css?v=24" />
     <script>
       // Apply the saved theme AND the saved AI-tutor height BEFORE the page
       // paints, so there's no flash of the wrong palette or a jumping layout.
@@ -50,6 +50,18 @@
             th = Math.min(maxh, Math.max(150, th));
             document.documentElement.style.setProperty("--tutor-h", th + "px");
           }
+        } catch (e) {
+          /* localStorage unavailable */
+        }
+        try {
+          var cl = parseFloat(localStorage.getItem("visuallm-col-left"));
+          if (!isNaN(cl))
+            document.documentElement.style.setProperty(
+              "--col-left", Math.min(460, Math.max(200, cl)) + "px");
+          var cr = parseFloat(localStorage.getItem("visuallm-col-right"));
+          if (!isNaN(cr))
+            document.documentElement.style.setProperty(
+              "--col-right", Math.min(420, Math.max(190, cr)) + "px");
         } catch (e) {
           /* localStorage unavailable */
         }
@@ -163,29 +175,67 @@
 
         <!-- Tab 3: Resources -->
         <section class="tab-panel" data-panel="resources" role="tabpanel" hidden>
-          <div class="panel-section">
-            <h3 class="section-title">Reference material</h3>
-            <p class="section-body">
-              Note: in the browser edition, uploaded files are kept locally but
-              are <strong>inert</strong> — the AI that reads them for context runs
-              in the desktop app. Chemistry, balancing, and the demos don't need
-              uploads.
-            </p>
+          <!-- Study Packs catalog -->
+          <div class="panel-section" id="dlcCatalogSection">
+            <h3 class="section-title">Study Packs</h3>
+            <div id="dlcCatalog" class="dlc-catalog"></div>
           </div>
 
-          <label class="drop-zone" id="dropZone">
-            <input id="resourceFileInput" type="file" multiple
-              accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
-            <strong>Drop files here or click to upload</strong>
-            <span>Text-based files only — kept in this browser session.</span>
-          </label>
+          <!-- Pack detail (shown when a pack is opened) -->
+          <div class="panel-section" id="dlcDetailSection" hidden>
+            <button type="button" id="dlcBack" class="dlc-back">← All packs</button>
+            <div id="dlcDetail" class="dlc-detail"></div>
+          </div>
 
-          <div class="resource-list" id="resourceList" hidden></div>
-          <p class="resource-empty" id="resourceEmpty">
-            No resources yet.
-          </p>
+          <!-- Import a pack -->
+          <div class="panel-section">
+            <h3 class="section-title">Import a pack</h3>
+            <label class="drop-zone dlc-drop" id="dlcDropZone">
+              <input id="dlcFileInput" type="file" accept=".json,application/json" />
+              <strong>Drop a <code>.dlc.json</code> pack</strong>
+              <span>Adds its demos &amp; experiments — offline, sandboxed.</span>
+            </label>
+            <p id="dlcImportMsg" class="dlc-msg" hidden></p>
+          </div>
+
+          <!-- AI Analysis → custom pack -->
+          <div class="panel-section">
+            <h3 class="section-title">AI Analysis → custom pack</h3>
+            <div id="dlcAnalyze">
+              <p class="section-body">
+                Upload a slide, notes, or a link and the AI builds a tailored demo
+                pack you can download and share.
+                <strong>Runs in the desktop app</strong> — make one there, then
+                Import the <code>.dlc.json</code> here.
+              </p>
+            </div>
+
+            <!-- Desktop context/analysis uploader — hidden in the browser edition
+                 (inert here); app.js reveals it when a real backend is present.
+                 Kept in the DOM so the resource bindings stay valid. -->
+            <div id="resourceUploadBlock" hidden>
+              <label class="drop-zone" id="dropZone">
+                <input id="resourceFileInput" type="file" multiple
+                  accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
+                <strong>Drop files here or click to upload</strong>
+                <span>Text-based files only.</span>
+              </label>
+              <div class="resource-list" id="resourceList" hidden></div>
+              <p class="resource-empty" id="resourceEmpty" hidden>No resources yet.</p>
+            </div>
+          </div>
         </section>
       </aside>
+
+      <!-- Width handle: drag to resize the Explanation / canvas columns. -->
+      <div
+        id="colResizerLeft"
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the left panel width (or use arrow keys)"
+        tabindex="0"
+      ></div>
 
       <!-- CENTER: visualization stage -->
       <section class="panel stage-panel">
@@ -197,6 +247,16 @@
           <span id="orbitHint" class="orbit-hint" hidden>drag to orbit · scroll to zoom · double-click to reset</span>
         </div>
       </section>
+
+      <!-- Width handle: drag to resize the canvas / Prompt columns. -->
+      <div
+        id="colResizerRight"
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the right panel width (or use arrow keys)"
+        tabindex="0"
+      ></div>
 
       <!-- RIGHT: prompt -->
       <aside class="panel right-panel">
@@ -270,8 +330,8 @@
     <script src="./js/chemistry.js?v=3"></script>
     <script src="./js/matching.js?v=3"></script>
     <script src="./js/solver.js?v=2"></script>
-    <script src="./js/planner.js?v=5"></script>
-    <script src="./js/browser-backend.js?v=3"></script>
-    <script src="./app.js?v=br9"></script>
+    <script src="./js/planner.js?v=6"></script>
+    <script src="./js/browser-backend.js?v=6"></script>
+    <script src="./app.js?v=br13"></script>
   </body>
 </html>

@@ -1591,6 +1591,32 @@ try:
 except Exception:  # noqa: BLE001 — optional; never block startup
     DEMO_LIBRARY = []
 
+# Study Packs (DLC): browse/launch curated + custom demo packs, and generate a
+# custom pack from uploaded material (AI analysis). See dlc.py.
+try:
+    import dlc as _dlc  # type: ignore
+except Exception:  # noqa: BLE001
+    _dlc = None
+
+_DLC_INDEX_CACHE: "list[dict] | None" = None
+
+
+def _library_index() -> list[dict]:
+    """A light index (id/area/topic/title/equation) for DLC pack resolution."""
+    global _DLC_INDEX_CACHE
+    if _DLC_INDEX_CACHE is None:
+        _DLC_INDEX_CACHE = [
+            {
+                "id": d.get("id"),
+                "area": d.get("area"),
+                "topic": d.get("topic"),
+                "title": d.get("title"),
+                "equation": d.get("equation", ""),
+            }
+            for d in DEMO_LIBRARY
+        ]
+    return _DLC_INDEX_CACHE
+
 # Chemistry: a chemical formula renders a 3D molecular structure; a reaction is
 # balanced and shown as reactants -> products with conservation. Known-correct
 # (parsed/computed server-side), so it short-circuits like the demo/library path.
@@ -2250,6 +2276,120 @@ def get_health() -> dict:
     }
 
 
+def _extract_json(text: str):
+    """Pull the first {...} JSON object out of a possibly fenced model reply."""
+    match = re.search(r"\{.*\}", text or "", re.S)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fetch_link_text(url: str) -> str:
+    """Fetch a user-supplied http(s) link and return its text (desktop only)."""
+    if not re.match(r"^https?://", url):
+        raise ValueError("Links must start with http:// or https://.")
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "VisualLM/1.0"})
+        with urllib.request.urlopen(request, timeout=12) as response:  # noqa: S310
+            raw = response.read(500_000)  # 500KB cap
+    except Exception as err:  # noqa: BLE001
+        raise ValueError(f"Couldn't fetch that link: {err}")
+    text = raw.decode("utf-8", "replace")
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def analyze_to_dlc(payload: dict) -> dict:
+    """AI analysis: turn uploaded material (text or a link) into a custom DLC of
+    generated demos. Reuses the normal Claude generation path per topic."""
+    client = anthropic_client()
+    if client is None:
+        raise RuntimeError(
+            "AI analysis needs Claude — set ANTHROPIC_API_KEY (and `pip install anthropic`)."
+        )
+    material = str(payload.get("material") or "").strip()
+    link = str(payload.get("link") or "").strip()
+    name = (str(payload.get("name") or "Custom Pack").strip() or "Custom Pack")[:80]
+    if link and not material:
+        material = _fetch_link_text(link)
+    if not material:
+        raise ValueError("Provide some material (paste text or a link) to analyze.")
+    material = material[:12_000]
+    max_demos = max(1, min(8, int(payload.get("max_demos") or 6)))
+
+    # 1) Ask Claude for concrete, visualizable topics from the material.
+    system = (
+        "You are building an interactive-demo pack from teaching material. "
+        "Identify the most useful STEM concepts to visualize as interactive, "
+        "slider-driven demos. Respond with ONLY JSON of the form "
+        '{"name": "short pack name", "topics": [{"title": "...", "prompt": "..."}]}. '
+        f"Give at most {max_demos} topics. Each `prompt` is a short instruction to "
+        "generate ONE demo, e.g. 'projectile motion with adjustable launch angle "
+        "and speed'."
+    )
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=2000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "low"},
+        system=system,
+        messages=[{"role": "user", "content": "Material:\n\n" + material}],
+    )
+    text = next((b.text for b in response.content if b.type == "text"), "").strip()
+    plan = _extract_json(text) or {}
+    topics = plan.get("topics") or []
+    if plan.get("name"):
+        name = str(plan["name"])[:80]
+    if not topics:
+        raise ValueError("Couldn't find teachable concepts in that material.")
+
+    slug = _dlc._slug(name) if _dlc else "custom-pack"
+
+    # 2) Generate a demo per topic (same generator the prompt box uses).
+    demos: list[dict] = []
+    for i, topic in enumerate(topics[:max_demos]):
+        prompt = str(topic.get("prompt") or topic.get("title") or "").strip()
+        if not prompt:
+            continue
+        try:
+            scene = generate_with_claude(prompt, "auto")
+        except Exception:  # noqa: BLE001 — skip a failed topic, keep the rest
+            continue
+        code = sanitize_code(scene.get("code", ""))
+        if not code.strip():
+            continue
+        demos.append({
+            "id": f"{slug}-{i + 1}",
+            "area": "Custom",
+            "topic": str(topic.get("title") or "Generated"),
+            "title": str(topic.get("title") or scene.get("title") or prompt)[:80],
+            "equation": scene.get("equation", ""),
+            "code": code,
+            "params": [dict(p) for p in scene.get("params", [])],
+            "explanation": scene.get("summary", "") or scene.get("explanation", ""),
+            "bullets": [str(b) for b in scene.get("bullets", [])][:4],
+        })
+    if not demos:
+        raise RuntimeError("The generator didn't produce any usable demos. Try different material.")
+
+    return {
+        "format": "visuallm-dlc/1",
+        "id": f"{slug}-ai",
+        "name": name,
+        "description": f"AI-generated from your material — {len(demos)} demos.",
+        "category": "custom",
+        "icon": "✨",
+        "source": "ai",
+        "version": "1.0",
+        "demos": demos,
+        "experiments": [],
+    }
+
+
 class VisualLMHandler(SimpleHTTPRequestHandler):
     # Cap per-request socket reads so a malicious / hung client that declares
     # Content-Length: N but only sends part of it can't pin a worker thread
@@ -2286,6 +2426,15 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/resources":
             send_json(self, HTTPStatus.OK, {"resources": list_resources()})
+            return
+        if parsed.path == "/api/packs":
+            if _dlc is None:
+                send_json(self, HTTPStatus.OK, {"packs": []})
+                return
+            idx = _library_index()
+            packs = [_dlc.pack_meta(p, idx) for p in _dlc.official_packs()]
+            packs += [_dlc.pack_meta(p, idx) for p in _dlc.custom_packs()]
+            send_json(self, HTTPStatus.OK, {"packs": packs})
             return
         if parsed.path == "/":
             self.path = "/index.html"
@@ -2324,7 +2473,12 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        routes = {"/api/visualize", "/api/repair", "/api/chat", "/api/resources"}
+        routes = {
+            "/api/visualize", "/api/repair", "/api/chat", "/api/resources",
+            "/api/pack", "/api/demo",
+            "/api/dlc/import", "/api/dlc/remove", "/api/dlc/export",
+            "/api/analyze",
+        }
         if parsed.path not in routes:
             send_json(self, HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
@@ -2366,6 +2520,18 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
                 self._handle_repair(payload)
             elif parsed.path == "/api/resources":
                 self._handle_resource_upload(payload)
+            elif parsed.path == "/api/pack":
+                self._handle_pack(payload)
+            elif parsed.path == "/api/demo":
+                self._handle_demo(payload)
+            elif parsed.path == "/api/dlc/import":
+                self._handle_dlc_import(payload)
+            elif parsed.path == "/api/dlc/remove":
+                self._handle_dlc_remove(payload)
+            elif parsed.path == "/api/dlc/export":
+                self._handle_dlc_export(payload)
+            elif parsed.path == "/api/analyze":
+                self._handle_analyze(payload)
             else:
                 self._handle_chat(payload)
         except Exception:  # noqa: BLE001
@@ -2387,6 +2553,62 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
             HTTPStatus.OK,
             {"resource": entry, "resources": list_resources()},
         )
+
+    # ---- Study Packs (DLC) ----
+    def _handle_pack(self, payload: dict) -> None:
+        pack = _dlc.find_pack(payload.get("id")) if _dlc else None
+        if not pack:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Pack not found."})
+            return
+        send_json(self, HTTPStatus.OK, _dlc.pack_catalog(pack, _library_index()))
+
+    def _handle_demo(self, payload: dict) -> None:
+        demo_id = payload.get("id")
+        demo = next((d for d in DEMO_LIBRARY if d.get("id") == demo_id), None)
+        if demo is None and _dlc is not None:
+            demo = _dlc.find_embedded(demo_id)
+        if demo is None:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Demo not found."})
+            return
+        send_json(self, HTTPStatus.OK, _demo_scene(demo, demo.get("title", "")))
+
+    def _handle_dlc_import(self, payload: dict) -> None:
+        obj = payload.get("dlc")
+        errors = _dlc.validate(obj) if _dlc else ["DLC engine unavailable."]
+        if errors:
+            send_json(
+                self,
+                HTTPStatus.BAD_REQUEST,
+                {"error": "Invalid pack — " + " ".join(errors[:3]), "errors": errors},
+            )
+            return
+        saved = _dlc.import_pack(obj)
+        send_json(self, HTTPStatus.OK, {"ok": True, "pack": _dlc.pack_meta(saved, _library_index())})
+
+    def _handle_dlc_remove(self, payload: dict) -> None:
+        ok = _dlc.remove_pack(payload.get("id")) if _dlc else False
+        send_json(self, HTTPStatus.OK, {"ok": bool(ok)})
+
+    def _handle_dlc_export(self, payload: dict) -> None:
+        pack = _dlc.find_pack(payload.get("id")) if _dlc else None
+        if not pack:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Pack not found."})
+            return
+        send_json(self, HTTPStatus.OK, {"dlc": pack})
+
+    def _handle_analyze(self, payload: dict) -> None:
+        try:
+            dlc_obj = analyze_to_dlc(payload)
+        except ValueError as err:
+            send_json(self, HTTPStatus.BAD_REQUEST, {"error": str(err)})
+            return
+        except RuntimeError as err:
+            send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})
+            return
+        if _dlc is not None:
+            _dlc.import_pack(dlc_obj)
+        meta = _dlc.pack_meta(dlc_obj, _library_index()) if _dlc else None
+        send_json(self, HTTPStatus.OK, {"dlc": dlc_obj, "pack": meta})
 
     def _handle_visualize(self, payload: dict) -> None:
         prompt = payload.get("prompt", "")

@@ -13,3 +13,7 @@ VisualLM.icns
 build/
 dist/
 *.spec.bak
+
+# Runtime user/AI DLC packs (not source)
+data/dlc_custom/
+web/data/dlc_custom/
