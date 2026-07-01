@@ -1016,7 +1016,15 @@
     btn.type = "button";
     btn.textContent = text;
     btn.addEventListener("click", () => {
-      el.chatInput.value = (opts && opts.value) || text;
+      const value = (opts && opts.value) || text;
+      // Scene-explanation chips send immediately — one click, one answer — so
+      // Quick Questions actually *do* something. The solver chip instead FILLS
+      // the box so the student can append their own numbers before pressing Ask.
+      if (opts && opts.send) {
+        sendChat(value);
+        return;
+      }
+      el.chatInput.value = value;
       // Scroll the chat into view FIRST — the tutor sits below the fold, so
       // without this the box fills silently and it looks like nothing happened.
       el.chatInput.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1030,9 +1038,33 @@
 
   function renderSuggestions(scene) {
     el.chatSuggestions.innerHTML = "";
-    // Always offer the step-by-step solver first.
+    const hasExplanation =
+      scene && !scene.browser_help && (scene.summary || (scene.bullets || []).length);
+    // Scene-aware questions answered on one click. In the browser edition these
+    // are answered offline from the scene's own explanation; the desktop app
+    // routes them to the real AI tutor.
+    if (hasExplanation) {
+      addSuggestionChip("Explain what I'm seeing", {
+        send: true,
+        value: "Explain what I'm seeing in this visualization.",
+      });
+      if (scene.params && scene.params.length) {
+        addSuggestionChip("What do the sliders change?", {
+          send: true,
+          value: "What do the sliders/controls change?",
+        });
+      }
+      if (scene.equation) {
+        addSuggestionChip("What does the equation mean?", {
+          send: true,
+          value: "What does the equation on screen mean?",
+        });
+      }
+    }
+    // The step-by-step solver — fills the box so numbers can be appended first.
     addSuggestionChip("Solve it step by step", { solve: true, value: SOLVE_PROMPT });
-    (scene.student_prompts || []).slice(0, 4).forEach((prompt) => {
+    // Any scene-provided follow-ups (desktop scenes may include these).
+    (scene.student_prompts || []).slice(0, 3).forEach((prompt) => {
       addSuggestionChip(prompt);
     });
   }
@@ -1549,11 +1581,365 @@
   })();
 
   /* ============================================================== */
+  /* Resizable top columns — drag the vertical handles to change the */
+  /* WIDTH of the Explanation / canvas / Prompt cards (height stays  */
+  /* fixed by the app-shell). Widths persist across sessions.        */
+  /* ============================================================== */
+
+  (function setupColumnResizers() {
+    const left = document.querySelector(".left-panel");
+    const right = document.querySelector(".right-panel");
+    if (!left || !right) return;
+    const root = document.documentElement;
+    const clampL = (w) => Math.min(460, Math.max(200, w)); // matches CSS clamp()
+    const clampR = (w) => Math.min(420, Math.max(190, w));
+
+    const restore = (key, prop, clamp) => {
+      try {
+        const v = parseFloat(localStorage.getItem(key));
+        if (!isNaN(v)) root.style.setProperty(prop, clamp(v) + "px");
+      } catch (e) {}
+    };
+    restore("visuallm-col-left", "--col-left", clampL);
+    restore("visuallm-col-right", "--col-right", clampR);
+
+    function wire(handle, side) {
+      if (!handle) return;
+      const prop = side === "left" ? "--col-left" : "--col-right";
+      const key = side === "left" ? "visuallm-col-left" : "visuallm-col-right";
+      const clamp = side === "left" ? clampL : clampR;
+      const width = (clientX) =>
+        side === "left"
+          ? clamp(clientX - left.getBoundingClientRect().left)
+          : clamp(right.getBoundingClientRect().right - clientX);
+      const save = () => {
+        try {
+          localStorage.setItem(
+            key,
+            String(Math.round(parseFloat(getComputedStyle(root).getPropertyValue(prop)) || 280)),
+          );
+        } catch (e) {}
+      };
+      let dragging = false;
+      handle.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        handle.classList.add("dragging");
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+        try {
+          handle.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        e.preventDefault();
+      });
+      handle.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        root.style.setProperty(prop, width(e.clientX) + "px");
+      });
+      const stop = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        try {
+          handle.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+        save();
+      };
+      handle.addEventListener("pointerup", stop);
+      handle.addEventListener("pointercancel", stop);
+      // Keyboard a11y: arrows nudge the width. For the left handle, Right grows
+      // the left card; for the right handle, Left grows the right card.
+      handle.addEventListener("keydown", (e) => {
+        const step = e.shiftKey ? 40 : 12;
+        const cur = parseFloat(getComputedStyle(root).getPropertyValue(prop)) || 280;
+        let next = null;
+        if (e.key === "ArrowLeft") next = side === "left" ? cur - step : cur + step;
+        else if (e.key === "ArrowRight") next = side === "left" ? cur + step : cur - step;
+        if (next === null) return;
+        root.style.setProperty(prop, clamp(next) + "px");
+        save();
+        e.preventDefault();
+      });
+    }
+    wire($("colResizerLeft"), "left");
+    wire($("colResizerRight"), "right");
+  })();
+
+  /* ============================================================== */
+  /* Study Packs (DLC) — browse official/custom packs, launch a      */
+  /* demo or experiment, import a .dlc.json. Backend-agnostic: talks  */
+  /* to /api/packs, /api/pack, /api/demo, /api/dlc/import — the       */
+  /* browser shim answers offline; the desktop server answers too.    */
+  /* ============================================================== */
+
+  // Run a fully-formed scene (from a pack) through the normal render+repair
+  // path so it reuses all the panel / tutor / demo-control wiring.
+  async function launchScene(scene, label) {
+    if (state.busy) return;
+    setBusyVisual(true, "Loading…");
+    if (runner.paused) {
+      runner.resume();
+      el.playPause.textContent = "Pause";
+    }
+    try {
+      await runSceneWithRepair(scene, label || scene.title || "");
+      if (el.frame && window.matchMedia("(max-width: 900px)").matches)
+        el.frame.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (err) {
+      setConfidence("Could not load this demo: " + err.message, "warn");
+    } finally {
+      setBusyVisual(false);
+    }
+  }
+
+  const dlc = {
+    catalog: $("dlcCatalog"),
+    catalogSection: $("dlcCatalogSection"),
+    detailSection: $("dlcDetailSection"),
+    detail: $("dlcDetail"),
+    back: $("dlcBack"),
+    drop: $("dlcDropZone"),
+    file: $("dlcFileInput"),
+    msg: $("dlcImportMsg"),
+    analyze: $("dlcAnalyze"),
+    uploadBlock: $("resourceUploadBlock"),
+  };
+
+  // On a real backend (desktop), the AI-analysis panel becomes an actual
+  // generator; in the browser it stays an explanatory note.
+  function renderAnalyzeForm() {
+    if (!dlc.analyze) return;
+    dlc.analyze.innerHTML =
+      '<p class="section-body">Paste notes or slide text — or a link — and the AI builds a tailored demo pack (one Claude call per topic). It installs here and downloads as a shareable <code>.dlc.json</code>.</p>' +
+      '<textarea id="dlcMaterial" class="dlc-material" rows="4" placeholder="Paste material, or a https:// link…"></textarea>' +
+      '<input id="dlcPackName" class="dlc-name" type="text" placeholder="Pack name (optional)" />' +
+      '<button id="dlcGenerate" type="button" class="action-button primary">Generate pack</button>' +
+      '<p id="dlcAnalyzeMsg" class="dlc-msg" hidden></p>';
+    const materialEl = $("dlcMaterial");
+    const nameEl = $("dlcPackName");
+    const genBtn = $("dlcGenerate");
+    const amsg = $("dlcAnalyzeMsg");
+    const say = (t, err) => {
+      if (!amsg) return;
+      amsg.hidden = false;
+      amsg.textContent = t;
+      amsg.classList.toggle("error", !!err);
+    };
+    genBtn.addEventListener("click", async () => {
+      const raw = (materialEl.value || "").trim();
+      if (!raw) return say("Paste some material or a link first.", true);
+      const body = { name: (nameEl.value || "").trim() };
+      if (/^https?:\/\//i.test(raw)) body.link = raw;
+      else body.material = raw;
+      genBtn.disabled = true;
+      say("Generating… the AI is building a demo per topic. This can take a minute.");
+      try {
+        const res = await postJSON("/api/analyze", body, { retry: false });
+        say("Built “" + (res.pack ? res.pack.name : "pack") + "” — installed and downloaded.");
+        if (res.dlc) {
+          const slug = (res.dlc.id || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+          downloadJSON(res.dlc, slug + ".dlc.json");
+        }
+        dlcShowCatalog();
+        dlcLoadCatalog();
+      } catch (e) {
+        say("Analysis failed: " + e.message, true);
+      } finally {
+        genBtn.disabled = false;
+      }
+    });
+  }
+
+  function dlcMsg(text, isError) {
+    if (!dlc.msg) return;
+    dlc.msg.hidden = false;
+    dlc.msg.textContent = text;
+    dlc.msg.classList.toggle("error", !!isError);
+  }
+  function dlcShowCatalog() {
+    if (dlc.detailSection) dlc.detailSection.hidden = true;
+    if (dlc.catalogSection) dlc.catalogSection.hidden = false;
+  }
+
+  async function dlcLoadCatalog() {
+    if (!dlc.catalog) return;
+    try {
+      const data = await fetch("/api/packs").then((r) => r.json());
+      renderPackCards(data.packs || []);
+    } catch (e) {
+      dlc.catalog.innerHTML = '<p class="resource-empty">Packs unavailable.</p>';
+    }
+  }
+
+  function renderPackCards(packs) {
+    dlc.catalog.innerHTML = "";
+    if (!packs.length) {
+      dlc.catalog.innerHTML = '<p class="resource-empty">No packs yet — import one below.</p>';
+      return;
+    }
+    packs.forEach((p) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "dlc-card" + (p.source === "official" ? "" : " custom");
+      card.innerHTML =
+        '<span class="dlc-card-icon">' + escapeHtml(p.icon || "📦") + "</span>" +
+        '<span class="dlc-card-body"><strong>' + escapeHtml(p.name) + "</strong>" +
+        '<span class="dlc-card-meta">' + p.demoCount + " demos" +
+        (p.experimentCount ? " · " + p.experimentCount + " labs" : "") +
+        (p.source !== "official" ? " · custom" : "") + "</span>" +
+        '<span class="dlc-card-desc">' + escapeHtml(p.description || "") + "</span></span>";
+      card.addEventListener("click", () => dlcOpenPack(p.id));
+      dlc.catalog.appendChild(card);
+    });
+  }
+
+  async function dlcOpenPack(id) {
+    try {
+      const pack = await postJSON("/api/pack", { id });
+      renderPackDetail(pack);
+      dlc.catalogSection.hidden = true;
+      dlc.detailSection.hidden = false;
+      dlc.detailSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (e) {
+      dlcMsg("Could not open pack: " + e.message, true);
+    }
+  }
+
+  function dlcDemoRow(d) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dlc-demo";
+    b.innerHTML =
+      "<span>" + escapeHtml(d.title) + "</span>" +
+      (d.equation ? "<code>" + escapeHtml(d.equation) + "</code>" : "");
+    if (d.blurb) b.title = d.blurb;
+    b.addEventListener("click", async () => {
+      const scene = await postJSON("/api/demo", { id: d.id }).catch(() => null);
+      if (scene && !scene.error) {
+        activateTab("explanation");
+        launchScene(scene, d.title);
+      } else {
+        dlcMsg("Could not load “" + d.title + "”.", true);
+      }
+    });
+    return b;
+  }
+
+  function renderPackDetail(pack) {
+    dlc.detail.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "dlc-detail-head";
+    head.innerHTML =
+      '<span class="dlc-card-icon">' + escapeHtml(pack.icon || "📦") + "</span>" +
+      "<div><strong>" + escapeHtml(pack.name) + "</strong>" +
+      ' <button type="button" class="dlc-dl" title="Download this pack as a .dlc.json file">⬇ Download</button>' +
+      (pack.source !== "official"
+        ? ' <button type="button" class="dlc-remove">Remove</button>'
+        : "") +
+      '<p class="dlc-detail-desc">' + escapeHtml(pack.description || "") + "</p></div>";
+    dlc.detail.appendChild(head);
+    const dl = head.querySelector(".dlc-dl");
+    if (dl) dl.addEventListener("click", () => dlcExport(pack.id, pack.name));
+    const rm = head.querySelector(".dlc-remove");
+    if (rm)
+      rm.addEventListener("click", async () => {
+        await postJSON("/api/dlc/remove", { id: pack.id }).catch(() => {});
+        dlcShowCatalog();
+        dlcLoadCatalog();
+      });
+
+    if (pack.experiments && pack.experiments.length) {
+      const h = document.createElement("h4");
+      h.className = "dlc-group-title";
+      h.textContent = "🧪 Experiments";
+      dlc.detail.appendChild(h);
+      pack.experiments.forEach((e) => dlc.detail.appendChild(dlcDemoRow(e)));
+    }
+    (pack.sections || []).forEach((sec) => {
+      const h = document.createElement("h4");
+      h.className = "dlc-group-title";
+      h.textContent = sec.area;
+      dlc.detail.appendChild(h);
+      sec.topics.forEach((tp) => tp.demos.forEach((d) => dlc.detail.appendChild(dlcDemoRow(d))));
+    });
+  }
+
+  function downloadJSON(obj, filename) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function dlcExport(id, name) {
+    try {
+      const res = await postJSON("/api/dlc/export", { id });
+      const slug = (id || name || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
+      downloadJSON(res.dlc, slug + ".dlc.json");
+    } catch (e) {
+      dlcMsg("Download failed: " + e.message, true);
+    }
+  }
+
+  async function dlcImportFile(file) {
+    if (!file) return;
+    try {
+      const obj = JSON.parse(await file.text());
+      const res = await postJSON("/api/dlc/import", { dlc: obj });
+      dlcMsg("Imported “" + (res.pack ? res.pack.name : obj.name || "pack") + "”.", false);
+      dlcShowCatalog();
+      dlcLoadCatalog();
+    } catch (e) {
+      dlcMsg("Import failed: " + e.message, true);
+    }
+  }
+
+  function initDLC() {
+    if (!dlc.catalog) return;
+    if (dlc.back) dlc.back.addEventListener("click", dlcShowCatalog);
+    if (dlc.file)
+      dlc.file.addEventListener("change", (e) =>
+        dlcImportFile(e.target.files && e.target.files[0]),
+      );
+    if (dlc.drop) {
+      ["dragover", "dragenter"].forEach((ev) =>
+        dlc.drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dlc.drop.classList.add("dragover");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dlc.drop.addEventListener(ev, () => dlc.drop.classList.remove("dragover")),
+      );
+      dlc.drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dlcImportFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+    }
+    // Reveal the desktop analysis uploader only when a real backend is present.
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((h) => {
+        const isServer = h.generator && h.generator !== "browser";
+        if (dlc.uploadBlock) dlc.uploadBlock.hidden = !isServer;
+        if (isServer) renderAnalyzeForm();
+      })
+      .catch(() => {});
+    dlcLoadCatalog();
+  }
+
+  /* ============================================================== */
   /* Boot                                                           */
   /* ============================================================== */
 
   refreshStatus();
   fetchResources();
+  initDLC();
   state.chat = [
     {
       role: "assistant",
