@@ -220,9 +220,9 @@
           <div class="panel-section">
             <h3 class="section-title">Import a pack</h3>
             <label class="drop-zone dlc-drop" id="dlcDropZone">
-              <input id="dlcFileInput" type="file" accept=".json,application/json" />
-              <strong>Drop a <code>.dlc.json</code> pack</strong>
-              <span>Adds its demos &amp; experiments — offline, sandboxed.</span>
+              <input id="dlcFileInput" type="file" accept=".zip,.json,application/zip,application/json" />
+              <strong>Drop a <code>.zip</code> pack</strong>
+              <span>…or a <code>.dlc.json</code>. Adds its demos &amp; experiments — offline, sandboxed.</span>
             </label>
             <p id="dlcImportMsg" class="dlc-msg" hidden></p>
           </div>
@@ -356,6 +356,7 @@ Explain heat diffusion across a metal plate and show how the temperature changes
       </div>
     </section>
 
-    <script src="./app.js?v=31"></script>
+    <script src="./zip.js?v=1"></script>
+    <script src="./app.js?v=32"></script>
   </body>
 </html>

@@ -1724,10 +1724,7 @@
       try {
         const res = await postJSON("/api/analyze", body, { retry: false });
         say("Built “" + (res.pack ? res.pack.name : "pack") + "” — installed and downloaded.");
-        if (res.dlc) {
-          const slug = (res.dlc.id || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
-          downloadJSON(res.dlc, slug + ".dlc.json");
-        }
+        if (res.dlc) downloadDlcZip(res.dlc, res.dlc.id);
         dlcShowCatalog();
         dlcLoadCatalog();
       } catch (e) {
@@ -1852,8 +1849,8 @@
     });
   }
 
-  function downloadJSON(obj, filename) {
-    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  function downloadBytes(bytes, filename, mime) {
+    const blob = new Blob([bytes], { type: mime || "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1863,11 +1860,49 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  const dlcSlug = (s) => (String(s || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase() || "pack");
+  const dlcSafe = (s) => String(s || "item").replace(/[^a-z0-9_-]+/gi, "-");
+
+  // A DLC is packaged as a browsable folder inside a .zip: manifest.json
+  // (metadata) + demos/<id>.json + experiments/<id>.json. Reassembled on import.
+  function dlcToFiles(dlc) {
+    const manifest = Object.assign({}, dlc);
+    delete manifest.demos;
+    delete manifest.experiments;
+    manifest._layout = "folder/1";
+    const files = [{ name: "manifest.json", text: JSON.stringify(manifest, null, 2) }];
+    (dlc.demos || []).forEach((d) =>
+      files.push({ name: "demos/" + dlcSafe(d.id) + ".json", text: JSON.stringify(d, null, 2) }),
+    );
+    (dlc.experiments || []).forEach((e) =>
+      files.push({ name: "experiments/" + dlcSafe(e.id) + ".json", text: JSON.stringify(e, null, 2) }),
+    );
+    return files;
+  }
+  function filesToDlc(files) {
+    const byName = {};
+    files.forEach((f) => (byName[f.name] = f.text));
+    if (!byName["manifest.json"]) throw new Error("no manifest.json inside the .zip");
+    const dlc = JSON.parse(byName["manifest.json"]);
+    delete dlc._layout;
+    const demos = [];
+    const experiments = [];
+    files.forEach((f) => {
+      if (/^demos\/.+\.json$/i.test(f.name)) demos.push(JSON.parse(f.text));
+      else if (/^experiments\/.+\.json$/i.test(f.name)) experiments.push(JSON.parse(f.text));
+    });
+    if (demos.length) dlc.demos = demos;
+    if (experiments.length) dlc.experiments = experiments;
+    return dlc;
+  }
+  function downloadDlcZip(dlc, id) {
+    if (!window.VisualLMZip) return dlcMsg("Zip support didn't load — reload the page.", true);
+    downloadBytes(window.VisualLMZip.zip(dlcToFiles(dlc)), dlcSlug(id) + ".zip", "application/zip");
+  }
   async function dlcExport(id, name) {
     try {
       const res = await postJSON("/api/dlc/export", { id });
-      const slug = (id || name || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase();
-      downloadJSON(res.dlc, slug + ".dlc.json");
+      downloadDlcZip(res.dlc, id || name);
     } catch (e) {
       dlcMsg("Download failed: " + e.message, true);
     }
@@ -1876,7 +1911,13 @@
   async function dlcImportFile(file) {
     if (!file) return;
     try {
-      const obj = JSON.parse(await file.text());
+      let obj;
+      if (/\.zip$/i.test(file.name)) {
+        if (!window.VisualLMZip) throw new Error("zip support didn't load — reload the page");
+        obj = filesToDlc(window.VisualLMZip.unzip(new Uint8Array(await file.arrayBuffer())));
+      } else {
+        obj = JSON.parse(await file.text());
+      }
       const res = await postJSON("/api/dlc/import", { dlc: obj });
       dlcMsg("Imported “" + (res.pack ? res.pack.name : obj.name || "pack") + "”.", false);
       dlcShowCatalog();
