@@ -17,6 +17,8 @@ _ASSETS = [
     "validate_scene.js", "scene_library.py", "scene_library_generated.json",
 ]
 datas = [(a, ".") for a in _ASSETS if Path(a).exists()]
+if Path("web/i18n.js").exists():
+    datas.append(("web/i18n.js", "web"))
 
 # pywebview is optional: include its backend only if it's installed, so the
 # build works without it (app_main.py falls back to a browser window).

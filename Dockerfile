@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py scene_library.py demo_library.py chemistry.py validate_scene.js \
      *_generated.json \
      index.html app.js sandbox-worker.js styles.css ./
+COPY web/i18n.js ./web/i18n.js
 
 # Cloud platforms inject PORT; main.py binds 0.0.0.0 automatically when set.
 ENV PORT=8080

@@ -6,6 +6,9 @@
   /* ============================================================== */
 
   const $ = (id) => document.getElementById(id);
+  const i18n = window.VisualLMI18n || null;
+  const tr = (key, vars) => (i18n ? i18n.t(key, vars) : key);
+  const currentLanguage = () => (i18n ? i18n.current() : "en");
 
   function escapeHtml(text) {
     return String(text)
@@ -587,6 +590,7 @@
         code: state.scene.code,
         error: err.message,
         where: err.where || "",
+        language: currentLanguage(),
       });
       await runSceneWithRepair(repaired, state.scene.prompt);
     } catch (repairErr) {
@@ -608,7 +612,7 @@
   function updatePanels(scene) {
     el.topic.textContent = scene.title;
     el.dimension.textContent = scene.dimension;
-    el.equation.textContent = scene.equation || "No single equation — concept scene";
+    el.equation.textContent = scene.equation || tr("no_equation");
     el.summary.textContent = scene.summary;
     el.tag.textContent = scene.tag;
     // The help card is self-explanatory on the canvas — hide the overlay pills
@@ -642,7 +646,7 @@
     document.querySelectorAll(".chip").forEach((c) => {
       c.disabled = isBusy;
     });
-    el.visualize.textContent = isBusy ? label || "Generating…" : "Visualize";
+    el.visualize.textContent = isBusy ? label || tr("generating") : tr("visualize");
     // Tell screen readers the visualization region is loading / settled.
     if (el.frame) el.frame.setAttribute("aria-busy", isBusy ? "true" : "false");
     if (!isBusy && setBusyVisual._restoreFocus) {
@@ -715,25 +719,26 @@
     const clean = (prompt || "").trim();
     if (!clean) return;
 
-    setBusyVisual(true, "Thinking…");
-    el.topic.textContent = "Generating…";
+    setBusyVisual(true, tr("thinking"));
+    el.topic.textContent = tr("generating");
     // Elapsed ticker — local generation can take 10-60s; a live counter makes
     // the wait legible instead of looking hung. (Curated/cached hits return so
     // fast the ticker never visibly advances.)
-    startElapsed("The AI is writing a custom animation for your prompt…");
+    startElapsed(tr("ai_writing"));
 
     // A new scene always starts playing. Without this, pausing one scene
     // left every FUTURE scene frozen on its first frame — which reads as
     // "the animation doesn't move" rather than "I paused it earlier".
     if (runner.paused) {
       runner.resume();
-      el.playPause.textContent = "Pause";
+      el.playPause.textContent = tr("pause");
     }
 
     try {
       const scene = await postJSON("/api/visualize", {
         prompt: clean,
         preferred_mode: state.mode,
+        language: currentLanguage(),
       });
       stopElapsed();
       await runSceneWithRepair(scene, clean);
@@ -805,7 +810,7 @@
     dc.innerHTML = "";
     const head = document.createElement("div");
     head.className = "demo-controls-head";
-    head.textContent = "Adjust the values — the visualization updates live";
+    head.textContent = tr("adjust_values");
     dc.appendChild(head);
     const grid = document.createElement("div");
     grid.className = "demo-params";
@@ -879,7 +884,7 @@
         } else if (current.from_solver) {
           // Worked solution: animated step-by-step slides for a specific problem.
           setConfidence(
-            "Worked solution • step-by-step slides — solved with your own numbers",
+            tr("worked_solution"),
             "ok",
           );
         } else if (current.from_chemistry) {
@@ -887,20 +892,20 @@
           // reaction. Known-correct — parsed and computed server-side.
           setConfidence(
             current.chem_kind === "balance"
-              ? "Chemistry • balanced equation — reactants → products, atoms conserved"
-              : "Chemistry • 3D molecular structure — drag to orbit, scroll to zoom",
+              ? tr("chem_balance")
+              : tr("chem_molecule"),
             "ok",
           );
         } else if (current.from_demo) {
           // Interactive curriculum demo — drag the sliders to explore.
           setConfidence(
-            `${current.area || "Interactive"} demo • drag the sliders to explore`,
+            tr("demo_status", { area: current.area || "Interactive" }),
             "ok",
           );
         } else if (current.from_library) {
           // Instant, hand-verified scene from the curated STEM corpus.
           setConfidence(
-            `${current.dimension} • curated STEM scene (instant, verified)` +
+            tr("curated_status", { dimension: current.dimension }) +
               (current.fallback_reason ? " — " + current.fallback_reason : ""),
             "ok",
           );
@@ -949,6 +954,7 @@
             code: current.code,
             error: err.message,
             where: err.where || "",
+            language: currentLanguage(),
           });
         } catch (repairErr) {
           setConfidence("Repair failed: " + repairErr.message, "warn");
@@ -1003,7 +1009,7 @@
       else div.removeAttribute("aria-hidden");
       const who = document.createElement("span");
       who.className = "chat-role";
-      who.textContent = msg.role === "user" ? "You" : "Tutor";
+      who.textContent = msg.role === "user" ? tr("you") : tr("tutor");
       const body = document.createElement("p");
       body.className = "chat-body";
       body.innerHTML = renderTutorMarkdown(msg.content);
@@ -1076,25 +1082,25 @@
     // are answered offline from the scene's own explanation; the desktop app
     // routes them to the real AI tutor.
     if (hasExplanation) {
-      addSuggestionChip("Explain what I'm seeing", {
+      addSuggestionChip(tr("explain_scene"), {
         send: true,
         value: "Explain what I'm seeing in this visualization.",
       });
       if (scene.params && scene.params.length) {
-        addSuggestionChip("What do the sliders change?", {
+        addSuggestionChip(tr("what_sliders"), {
           send: true,
           value: "What do the sliders/controls change?",
         });
       }
       if (scene.equation) {
-        addSuggestionChip("What does the equation mean?", {
+        addSuggestionChip(tr("equation_mean"), {
           send: true,
           value: "What does the equation on screen mean?",
         });
       }
     }
     // The step-by-step solver — fills the box so numbers can be appended first.
-    addSuggestionChip("Solve it step by step", { solve: true, value: SOLVE_PROMPT });
+    addSuggestionChip(tr("solve_steps"), { solve: true, value: SOLVE_PROMPT });
     // Any scene-provided follow-ups (desktop scenes may include these).
     (scene.student_prompts || []).slice(0, 3).forEach((prompt) => {
       addSuggestionChip(prompt);
@@ -1108,7 +1114,7 @@
     el.sendChat.disabled = true;
 
     state.chat.push({ role: "user", content: clean });
-    state.chat.push({ role: "assistant", content: "Thinking…", pending: true });
+    state.chat.push({ role: "assistant", content: tr("thinking"), pending: true });
     renderChat();
 
     const history = state.chat
@@ -1122,6 +1128,7 @@
         question: clean,
         visualization: state.scene || {},
         history: history.slice(0, -1),
+        language: currentLanguage(),
       });
       if (session !== chatSessionId) return; // chat was reset; discard response
       state.chat.pop();
@@ -1150,27 +1157,27 @@
       state.health = health;
       const gen = health.generator;
       if (gen === "claude") {
-        el.statusBadge.textContent = "Claude online";
+        el.statusBadge.textContent = "Claude " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.claude.model || "claude");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.claude.model || "claude");
       } else if (gen === "openai") {
-        el.statusBadge.textContent = "ChatGPT online";
+        el.statusBadge.textContent = "ChatGPT " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.openai.model || "openai");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.openai.model || "openai");
       } else if (gen === "gemini") {
-        el.statusBadge.textContent = "Gemini online";
+        el.statusBadge.textContent = "Gemini " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.gemini.model || "gemini");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.gemini.model || "gemini");
       } else {
         // No cloud key — the AI relies only on code, so the app still runs the
         // built-in pure-code library (demos, chemistry, the step-by-step solver).
-        el.statusBadge.textContent = "Code-only";
+        el.statusBadge.textContent = tr("code_only");
         el.statusBadge.className = "status-pill";
         el.modelLabel.textContent =
           "Demos, chemistry & solver run offline. Set ANTHROPIC_API_KEY for AI generation.";
       }
     } catch (err) {
-      el.statusBadge.textContent = "Server offline";
+      el.statusBadge.textContent = tr("server_offline");
       el.statusBadge.className = "status-pill error";
       el.modelLabel.textContent = "Could not reach the VisualLM server.";
     }
@@ -1397,10 +1404,10 @@
   el.playPause.addEventListener("click", () => {
     if (runner.paused) {
       runner.resume();
-      el.playPause.textContent = "Pause";
+      el.playPause.textContent = tr("pause");
     } else {
       runner.pause();
-      el.playPause.textContent = "Play";
+      el.playPause.textContent = tr("play");
     }
   });
 
@@ -1507,7 +1514,7 @@
     const isLight = document.documentElement.dataset.theme === "light";
     themeToggle.setAttribute(
       "aria-label",
-      isLight ? "Switch to dark theme" : "Switch to light theme",
+      isLight ? tr("switch_dark") : tr("switch_light"),
     );
   }
   syncThemeToggleLabel();
@@ -2005,18 +2012,38 @@
   /* Boot                                                           */
   /* ============================================================== */
 
+  function localizeIdleState() {
+    if (state.scene) return;
+    el.topic.textContent = tr("waiting");
+    el.dimension.textContent = tr("auto");
+    if (el.summary.dataset.initialI18n) el.summary.textContent = tr(el.summary.dataset.initialI18n);
+    if (el.confidence.dataset.initialI18n) setConfidence(tr(el.confidence.dataset.initialI18n));
+  }
+
+  localizeIdleState();
   refreshStatus();
   fetchResources();
   initDLC();
   state.chat = [
     {
       role: "assistant",
-      content:
-        "Type any STEM idea or equation and press Visualize. I'll generate a " +
-        "custom animation, then answer questions about it here.",
+      content: tr("coach_welcome"),
     },
   ];
   renderChat();
+
+  window.addEventListener("visuallm:languagechange", () => {
+    localizeIdleState();
+    if (!state.scene && state.chat.length === 1) state.chat[0].content = tr("coach_welcome");
+    el.playPause.textContent = tr(runner.paused ? "play" : "pause");
+    syncThemeToggleLabel();
+    refreshStatus();
+    renderChat();
+    if (state.scene) {
+      renderSuggestions(state.scene);
+      renderDemoControls(state.scene);
+    }
+  });
 
   // NOTE: we intentionally do NOT auto-visualize on load. Every generation
   // costs an AI call (the operator's API credits on a public deployment),

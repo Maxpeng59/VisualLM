@@ -15,6 +15,7 @@ VisualLM ships in two flavors of the same project:
 | Host | **GitHub Pages** (static) — instant, free, shareable link | Your machine, or any server host (Render, etc.) |
 | Chemistry: 3D molecules + equation balancing | ✅ | ✅ |
 | 333 interactive curriculum demos + 50 curated scenes | ✅ | ✅ |
+| Interface languages: English, Chinese, Spanish, Hindi, French, German | ✅ | ✅ |
 | Free-form AI generation (type *any* idea) | ❌ (needs a model + key) | ✅ (Claude ▸ ChatGPT ▸ Gemini) |
 | AI tutor chat | ❌ | ✅ |
 
@@ -56,6 +57,16 @@ prompt ──▶ /api/visualize ──▶ AI writes scene code ──▶ sandbox
 
 **3D scenes are interactive:** drag the canvas to orbit, scroll to zoom,
 double-click to reset the view.
+
+## Languages
+
+Use the language selector in the top bar to switch the learning interface
+between English, Simplified Chinese, Spanish, Hindi, French, and German. The
+choice is saved on the device and restored at the next launch. In the
+desktop/server edition, the selected language is also sent to the configured AI
+provider so custom scene titles, explanations, canvas labels, and tutor replies
+are generated in that language. Equations, variable names, and units remain
+universal. Built-in curated lesson subject matter remains available offline.
 
 ## Real 3D, not point clouds
 

@@ -189,6 +189,24 @@ button:focus-visible, textarea:focus-visible, input:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.language-control { display: inline-flex; min-width: 0; }
+.language-control select {
+  min-width: 0;
+  max-width: 132px;
+  height: 30px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+}
+.language-control select:hover { border-color: var(--border-2); }
+.language-control select:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
 
 .status-pill {
   display: inline-flex;
@@ -1225,6 +1243,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible {
   .topbar { padding: 8px 12px; gap: 10px; }
   .topbar-status { gap: 8px; }
   .topbar-meta { display: none; }
+  .language-control select { max-width: 104px; }
   .workspace { padding: 8px 10px; }
   .tutor-panel { margin: 0 10px 10px; padding: 14px; }
   .composer-actions { grid-template-columns: 1fr; }
@@ -1236,6 +1255,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible {
 @media (max-width: 420px) {
   .brand-subtitle { display: none; }
   .status-pill { padding-inline: 8px; font-size: 11px; }
+  .topbar-status { gap: 6px; }
+  .language-control select { max-width: 92px; padding-left: 8px; }
   .tab { gap: 4px; font-size: 11px; }
   .tab-count { padding-inline: 5px; }
   .demo-param { grid-template-columns: minmax(70px, 1fr) auto; }

@@ -24,6 +24,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import main  # noqa: E402
 
 
+class LanguageTests(unittest.TestCase):
+    def test_supported_language_codes(self):
+        for code in ("en", "zh", "es", "hi", "fr", "de"):
+            self.assertEqual(main.normalize_language(code), code)
+        self.assertEqual(main.normalize_language("zh-CN"), "zh")
+        self.assertEqual(main.normalize_language("unknown"), "en")
+
+    def test_generation_prompt_requests_selected_language(self):
+        prompt = main._prompt_for_language("Explain gravity", "de")
+        self.assertTrue(prompt.startswith("Explain gravity"))
+        self.assertIn("German", prompt)
+        self.assertIn("learner-facing canvas text", prompt)
+        self.assertEqual(main._prompt_for_language("Explain gravity", "en"), "Explain gravity")
+
+
 class SanitizeCodeTests(unittest.TestCase):
     def test_strips_markdown_fence(self):
         code = "```js\nH.background();\n```"
@@ -342,14 +357,21 @@ class EndpointTests(unittest.TestCase):
             "p",
         )
         original = main.plan_visualization
-        main.plan_visualization = lambda prompt, mode: fake
+        received = {}
+        def fake_plan(prompt, mode, language="en"):
+            received.update(prompt=prompt, mode=mode, language=language)
+            return fake
+        main.plan_visualization = fake_plan
         try:
-            status, body = self.request("POST", "/api/visualize", {"prompt": "p"})
+            status, body = self.request(
+                "POST", "/api/visualize", {"prompt": "p", "language": "fr"}
+            )
         finally:
             main.plan_visualization = original
         self.assertEqual(status, 200)
         self.assertEqual(body["title"], "T")
         self.assertEqual(body["dimension"], "3D")
+        self.assertEqual(received, {"prompt": "p", "mode": "auto", "language": "fr"})
 
     def test_access_code_gate(self):
         main.ACCESS_CODE = "sesame"
@@ -398,7 +420,7 @@ class EndpointTests(unittest.TestCase):
         # handlers already convert to 503) must come back as a clean 500, not a
         # dropped connection. stderr is suppressed because the guard logs the
         # traceback by design.
-        def boom(prompt, mode):
+        def boom(prompt, mode, language="en"):
             raise ValueError("unexpected handler bug")
 
         original = main.plan_visualization

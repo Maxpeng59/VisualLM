@@ -1914,9 +1914,41 @@ def _solver_response(sc: dict, prompt: str) -> dict:
 _DEMO_THRESHOLD = 2.0
 
 
-def plan_visualization(prompt: str, preferred_mode: str) -> dict:
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Simplified Chinese",
+    "es": "Spanish",
+    "hi": "Hindi",
+    "fr": "French",
+    "de": "German",
+}
+
+
+def normalize_language(value: object) -> str:
+    """Return one of the six UI language codes; unknown values fall back safely."""
+    code = str(value or "en").strip().lower().split("-", 1)[0]
+    return code if code in _LANGUAGE_NAMES else "en"
+
+
+def _prompt_for_language(prompt: str, language: str) -> str:
+    """Ask model-backed scenes to localize teaching text without altering math."""
+    code = normalize_language(language)
+    if code == "en":
+        return prompt
+    return (
+        prompt
+        + "\n\nOUTPUT LANGUAGE: Write the title, summary, teaching bullets, "
+        + "parameter labels, and all learner-facing canvas text in "
+        + _LANGUAGE_NAMES[code]
+        + ". Keep equations, variable names, and units universal."
+    )
+
+
+def plan_visualization(prompt: str, preferred_mode: str, language: str = "en") -> dict:
+    language = normalize_language(language)
+    cache_mode = preferred_mode if language == "en" else f"{preferred_mode}:{language}"
     # 1. Exact-prompt cache — instant repeat for an already-validated scene.
-    cached = scene_cache_get(prompt, preferred_mode)
+    cached = scene_cache_get(prompt, cache_mode)
     if cached:
         cached["cached"] = True
         return cached
@@ -1929,7 +1961,7 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     chem = _chemistry_scene(prompt)
     if chem is not None:
         result = _chemistry_response(chem, prompt)
-        scene_cache_put(prompt, preferred_mode, result)
+        scene_cache_put(prompt, cache_mode, result)
         return result
 
     # 1.45 Worked solution — a SPECIFIC numeric problem (e.g. a triangle with
@@ -1940,7 +1972,7 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     solv = _solver_scene(prompt)
     if solv is not None:
         result = _solver_response(solv, prompt)
-        scene_cache_put(prompt, preferred_mode, result)
+        scene_cache_put(prompt, cache_mode, result)
         return result
 
     # 1.5 Curriculum demo — the interactive "fill in the values" path. If the
@@ -1970,15 +2002,20 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     if (lib_scene is not None and lib_score >= strong_threshold and confident
             and not _weak_prose_match(prompt, lib_scene, lib_score)):
         result = _library_scene(lib_scene, prompt)
-        scene_cache_put(prompt, preferred_mode, result)
+        scene_cache_put(prompt, cache_mode, result)
         return result
 
     # 3. Generate with the provider chain (each validated + repaired server-side).
     errors = []
+    generation_prompt = _prompt_for_language(prompt, language)
     for label, fn in _cloud_generators():
         try:
-            scene = _try_generate(fn, prompt, preferred_mode, label, max_attempts=2)
-            scene_cache_put(prompt, preferred_mode, scene)
+            scene = _try_generate(fn, generation_prompt, preferred_mode, label, max_attempts=2)
+            # Keep internal localization instructions out of subsequent UI and
+            # repair context while retaining the localized generated fields.
+            scene["prompt"] = prompt
+            scene["language"] = language
+            scene_cache_put(prompt, cache_mode, scene)
             return scene
         except Exception as error:  # noqa: BLE001
             errors.append(f"{label}: {error}")
@@ -2169,6 +2206,13 @@ def build_tutor_system_prompt(viz: dict) -> str:
     resources = resources_context_block()
     if resources:
         base += "\n\n" + resources
+    language = normalize_language(viz.get("_response_language"))
+    if language != "en":
+        base += (
+            "\n\nRESPONSE LANGUAGE: Answer entirely in "
+            + _LANGUAGE_NAMES[language]
+            + ". Keep equations, variable names, and units universal."
+        )
     return base
 
 
@@ -2613,13 +2657,14 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
     def _handle_visualize(self, payload: dict) -> None:
         prompt = payload.get("prompt", "")
         mode = payload.get("preferred_mode", "auto")
+        language = normalize_language(payload.get("language"))
         if mode not in {"auto", "2d", "3d"}:
             mode = "auto"
         if not isinstance(prompt, str) or not prompt.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "A non-empty prompt is required."})
             return
         try:
-            result = plan_visualization(prompt.strip()[:4000], mode)
+            result = plan_visualization(prompt.strip()[:4000], mode, language)
         except RuntimeError as error:
             send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
             return
@@ -2630,13 +2675,17 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
         code = payload.get("code", "")
         error = payload.get("error", "")
         where = payload.get("where", "")
+        language = normalize_language(payload.get("language"))
         if not isinstance(prompt, str) or not isinstance(code, str) or not code.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "prompt and code are required."})
             return
         try:
             result = repair_visualization(
-                prompt.strip()[:4000], code[:20000], str(error)[:2000], str(where)[:300]
+                _prompt_for_language(prompt.strip()[:4000], language),
+                code[:20000], str(error)[:2000], str(where)[:300]
             )
+            result["prompt"] = prompt.strip()[:4000]
+            result["language"] = language
         except RuntimeError as err:
             send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})
             return
@@ -2648,6 +2697,8 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
         # thinking the second access could still be None.
         raw_viz = payload.get("visualization")
         viz: dict = raw_viz if isinstance(raw_viz, dict) else {}
+        viz = dict(viz)
+        viz["_response_language"] = normalize_language(payload.get("language"))
         history = normalize_history(payload.get("history"))
         if not isinstance(question, str) or not question.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "A non-empty question is required."})
