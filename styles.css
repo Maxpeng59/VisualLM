@@ -5,6 +5,8 @@
 * { box-sizing: border-box; }
 
 :root {
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   /* Dark theme is the default. The user can flip to light with the toggle
    * in the topbar; the choice is persisted in localStorage. */
   --bg:        #0a0a0a;
@@ -67,11 +69,14 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -95,11 +100,11 @@ h1, h2, h3, h4 {
 p { margin: 0; }
 
 code, .meta-cell code {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
 
-button { font-family: inherit; }
+button { font-family: inherit; min-width: 0; }
 
 textarea, input[type="text"] {
   font-family: inherit;
@@ -111,6 +116,7 @@ textarea, input[type="text"] {
   outline: none;
   resize: vertical;
   width: 100%;
+  min-width: 0;
   font-size: 14px;
   line-height: 1.55;
   transition: border-color 120ms ease, background 120ms ease;
@@ -118,6 +124,10 @@ textarea, input[type="text"] {
 textarea:focus, input[type="text"]:focus {
   border-color: var(--border-2);
   background: var(--panel);
+}
+button:focus-visible, textarea:focus-visible, input:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -152,6 +162,7 @@ textarea:focus, input[type="text"]:focus {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 .brand-mark {
   color: var(--good);
@@ -162,15 +173,21 @@ textarea:focus, input[type="text"]:focus {
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+.brand-copy { display: grid; min-width: 0; }
+.brand-subtitle { color: var(--subtle); font-size: 10.5px; line-height: 1.2; }
 
 .topbar-status {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 .topbar-meta {
   color: var(--muted);
   font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-pill {
@@ -214,6 +231,7 @@ textarea:focus, input[type="text"]:focus {
   min-height: 0;
   flex: 1 1 0;
   align-items: stretch;
+  width: 100%;
 }
 
 .panel {
@@ -223,6 +241,7 @@ textarea:focus, input[type="text"]:focus {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Common heading inside any panel */
@@ -248,7 +267,8 @@ textarea:focus, input[type="text"]:focus {
 }
 
 .tab-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-bottom: 1px solid var(--border);
   background: var(--bg-2);
   padding: 0 8px;
@@ -259,13 +279,15 @@ textarea:focus, input[type="text"]:focus {
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--muted);
-  padding: 12px 12px;
-  font-size: 13px;
+  padding: 11px 6px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  justify-content: center;
+  line-height: 1.2;
   transition: color 120ms ease, border-color 120ms ease;
 }
 .tab:hover { color: var(--text); }
@@ -303,6 +325,7 @@ textarea:focus, input[type="text"]:focus {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .meta-grid {
@@ -331,17 +354,14 @@ textarea:focus, input[type="text"]:focus {
   font-size: 13.5px;
   color: var(--text);
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .meta-cell code {
   color: var(--info);
   background: transparent;
   padding: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .bullet-list {
@@ -359,6 +379,7 @@ textarea:focus, input[type="text"]:focus {
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 /* Examples tab */
@@ -658,6 +679,7 @@ textarea:focus, input[type="text"]:focus {
   gap: 6px;
   pointer-events: none;
   z-index: 2;
+  max-width: calc(100% - 24px);
 }
 .canvas-overlay span {
   display: inline-flex;
@@ -671,6 +693,8 @@ textarea:focus, input[type="text"]:focus {
   border: 1px solid var(--border);
   font-size: 12px;
   color: var(--muted);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 #sceneTag { color: var(--info); font-weight: 500; }
 /* Bare canvas (the browser-edition help card): hide the status/tag pills — the
@@ -748,7 +772,7 @@ textarea:focus, input[type="text"]:focus {
 
 .demo-params {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: 11px 28px;
 }
 /* One compact row per parameter: name | slider | value chip. Keeps the panel
@@ -771,7 +795,7 @@ textarea:focus, input[type="text"]:focus {
   justify-self: end;
   min-width: 3ch;
   text-align: right;
-  font: 600 12.5px 'JetBrains Mono', ui-monospace, monospace;
+  font: 600 12.5px var(--font-mono);
   color: var(--info);
   background: color-mix(in srgb, var(--info) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
@@ -833,6 +857,43 @@ textarea:focus, input[type="text"]:focus {
   overflow-y: auto;
 }
 .right-panel .panel-header { padding: 0; }
+.panel-eyebrow {
+  color: var(--info);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.learning-path {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: path;
+}
+.learning-path li {
+  counter-increment: path;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.learning-path li::before {
+  content: counter(path);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-2);
+  border-radius: 50%;
+  color: var(--info);
+  font: 700 10px var(--font-mono);
+}
+.learning-path strong { color: var(--text); }
 .right-panel textarea#promptInput {
   min-height: 120px;
   font-size: 13.5px;
@@ -1009,6 +1070,7 @@ textarea:focus, input[type="text"]:focus {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  min-width: 0;
 }
 
 .chat-messages {
@@ -1032,6 +1094,7 @@ textarea:focus, input[type="text"]:focus {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel-2);
+  min-width: 0;
 }
 .chat-message.assistant { justify-self: start; background: var(--chat-assistant-bg); }
 .chat-message.user      { justify-self: end;   background: var(--chat-user-bg); }
@@ -1048,7 +1111,7 @@ textarea:focus, input[type="text"]:focus {
   color: var(--text);
   line-height: 1.6;
   font-size: 13.5px;
-  word-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 .chat-body strong { color: var(--text); font-weight: 600; }
 .chat-body em { font-style: italic; color: var(--muted); }
@@ -1059,6 +1122,8 @@ textarea:focus, input[type="text"]:focus {
   padding: 0 5px;
   font-size: 12.5px;
   color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .chat-body ol,
 .chat-body ul {
@@ -1154,6 +1219,33 @@ textarea:focus, input[type="text"]:focus {
   .chat-column { display: grid; }
   .chat-messages { flex: none; min-height: 200px; max-height: 60vh; }
   .chat-sidebar { overflow: visible; }
+}
+
+@media (max-width: 560px) {
+  .topbar { padding: 8px 12px; gap: 10px; }
+  .topbar-status { gap: 8px; }
+  .topbar-meta { display: none; }
+  .workspace { padding: 8px 10px; }
+  .tutor-panel { margin: 0 10px 10px; padding: 14px; }
+  .composer-actions { grid-template-columns: 1fr; }
+  .mode-picker { align-items: flex-start; flex-direction: column; }
+  .segmented-control { width: 100%; }
+  .mode-button { flex: 1; }
+}
+
+@media (max-width: 420px) {
+  .brand-subtitle { display: none; }
+  .status-pill { padding-inline: 8px; font-size: 11px; }
+  .tab { gap: 4px; font-size: 11px; }
+  .tab-count { padding-inline: 5px; }
+  .demo-param { grid-template-columns: minmax(70px, 1fr) auto; }
+  .demo-param input[type="range"] { grid-column: 1 / -1; }
+  .canvas-overlay { bottom: 8px; left: 8px; max-width: calc(100% - 16px); }
+  .orbit-hint { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
 
 /* ============================================================== */

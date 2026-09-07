@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a0a" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
@@ -26,15 +27,9 @@
       NB: full functionality (the canvas Web Worker + the data fetches) still
       requires http — browsers block workers and fetch under file://.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' 'unsafe-inline' file:; style-src 'self' file: https://fonts.googleapis.com; font-src 'self' file: https://fonts.gstatic.com; connect-src 'self' file:; worker-src 'self' file:; img-src 'self' file: data:; frame-ancestors 'none'; base-uri 'self';" />
-    <title>VisualLM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="./styles.css?v=21" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' 'unsafe-inline' file:; style-src 'self' file:; font-src 'self' file: data:; connect-src 'self' file:; worker-src 'self' file:; img-src 'self' file: data:; frame-ancestors 'none'; base-uri 'self';" />
+    <title>VisualLM · Animated STEM lessons</title>
+    <link rel="stylesheet" href="./styles.css?v=22" />
     <script>
       // Apply the saved theme AND the saved AI-tutor height BEFORE the page
       // paints, so there's no flash of the wrong palette or a jumping layout.
@@ -74,7 +69,10 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">●</span>
-        <span class="brand-name">VisualLM</span>
+        <span class="brand-copy">
+          <span class="brand-name">VisualLM</span>
+          <span class="brand-subtitle">Animated STEM studio</span>
+        </span>
       </div>
       <div class="topbar-status">
         <span id="ollamaStatusBadge" class="status-pill pending">Checking…</span>
@@ -131,11 +129,11 @@
           </div>
 
           <div class="panel-section">
-            <h3 class="section-title">Key points</h3>
+            <h3 class="section-title">Learning checkpoints</h3>
             <ul id="explanationList" class="bullet-list">
-              <li>Generation: Claude writes the animation code from scratch.</li>
-              <li>Sandbox: the code runs in a locked-down Web Worker.</li>
-              <li>Repair loop: errors are caught and fixed automatically.</li>
+              <li>Observe the motion first and identify what changes.</li>
+              <li>Adjust a value and predict the result before replaying.</li>
+              <li>Explain the pattern in your own words to check understanding.</li>
             </ul>
           </div>
         </section>
@@ -290,12 +288,19 @@
       <!-- RIGHT: prompt -->
       <aside class="panel right-panel">
         <div class="panel-header">
-          <h2>Prompt</h2>
-          <p>Describe the idea or give an equation.</p>
+          <span class="panel-eyebrow">Start a lesson</span>
+          <h2>What do you want to understand?</h2>
+          <p>Enter a formula, reaction, topic, or worked problem.</p>
         </div>
 
+        <ol class="learning-path" aria-label="Learning flow">
+          <li><span><strong>Describe</strong> the idea you want to explore.</span></li>
+          <li><span><strong>Observe</strong> the animation and change its values.</span></li>
+          <li><span><strong>Question</strong> the result using the learning coach.</span></li>
+        </ol>
+
         <label class="sr-only" for="promptInput">Prompt</label>
-        <textarea id="promptInput" spellcheck="false" rows="6">
+        <textarea id="promptInput" spellcheck="true" maxlength="4000" rows="6">
 Explain heat diffusion across a metal plate and show how the temperature changes over space.</textarea>
 
         <div class="mode-picker">
@@ -313,7 +318,7 @@ Explain heat diffusion across a metal plate and show how the temperature changes
         </div>
 
         <div class="prompt-foot">
-          <p class="hint">Cmd/Ctrl + Enter to run. The sandbox renders in the center.</p>
+          <p class="hint">Tip: change one variable at a time. Press Cmd/Ctrl + Enter to run.</p>
         </div>
       </aside>
     </main>
@@ -331,8 +336,9 @@ Explain heat diffusion across a metal plate and show how the temperature changes
     <!-- BOTTOM: tutor -->
     <section class="panel tutor-panel">
       <div class="tutor-header">
-        <h2>AI Tutor</h2>
-        <p>Ask anything about the current scene. Answers stay grounded in the animation and your uploaded resources.</p>
+        <span class="panel-eyebrow">Reflect and practise</span>
+        <h2>Learning coach</h2>
+        <p>Ask for a hint, a comparison, or a next-step question grounded in the current scene.</p>
       </div>
 
       <div class="tutor-grid">
@@ -357,6 +363,6 @@ Explain heat diffusion across a metal plate and show how the temperature changes
     </section>
 
     <script src="./zip.js?v=1"></script>
-    <script src="./app.js?v=32"></script>
+    <script src="./app.js?v=33"></script>
   </body>
 </html>

@@ -65,8 +65,15 @@
     s = s.replace(/\\(?:quad|qquad)\b/g, " ");
     s = s.replace(/\\[,;:!> ]/g, " ");
 
-    // \mathrm/\mathbf/\operatorname{...} -> just the inner text.
-    s = s.replace(/\\(?:mathrm|mathbf|mathit|operatorname)\s*\{([^{}]*)\}/g, "$1");
+    // Formatting commands are meaningful to TeX, but this interface renders
+    // plain text. Remove several common wrappers (including nested ones) so a
+    // model response never leaks incompatible style markup into the UI.
+    for (let i = 0; i < 3; i += 1) {
+      s = s.replace(
+        /\\(?:mathrm|mathbf|mathit|mathsf|mathtt|operatorname|textbf|textit|emph|underline|overline|vec)\s*\{([^{}]*)\}/g,
+        "$1",
+      );
+    }
 
     // \frac{a}{b} -> a/b. Tolerate doubled braces {{...}} that local models
     // sometimes emit, and parenthesize a compound numerator/denominator.
@@ -269,6 +276,9 @@
       this.paused = false;
       this.onCrash = null; // called for runtime errors after a scene is live
       this._resizeRaf = 0;
+      this._lastDims = null;
+      this._orbitRaf = 0;
+      this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
       this._spawn();
       // Debounce via rAF: a window-drag fires resize ~60×/s, and each
       // _resize() sets canvas.width which CLEARS the bitmap. Without coalescing,
@@ -281,6 +291,16 @@
           this._resize();
         });
       });
+      if (typeof ResizeObserver !== "undefined") {
+        this._resizeObserver = new ResizeObserver(() => {
+          if (this._resizeRaf) return;
+          this._resizeRaf = requestAnimationFrame(() => {
+            this._resizeRaf = 0;
+            this._resize();
+          });
+        });
+        this._resizeObserver.observe(this.frame);
+      }
       this._wireOrbit();
 
       // Stop rendering while the tab is hidden — no point animating a canvas
@@ -320,11 +340,7 @@
         const dy = e.clientY - lastY;
         lastX = e.clientX;
         lastY = e.clientY;
-        this.worker.postMessage({
-          type: "orbit",
-          dyaw: dx * 0.008,
-          dpitch: dy * 0.008,
-        });
+        this._queueOrbit({ dyaw: dx * 0.008, dpitch: dy * 0.008 });
       });
       const endDrag = () => {
         dragging = false;
@@ -337,15 +353,30 @@
         (e) => {
           if (!this.worker) return;
           e.preventDefault();
-          this.worker.postMessage({
-            type: "orbit",
-            dzoom: Math.exp(-e.deltaY * 0.0012),
-          });
+          this._queueOrbit({ dzoom: Math.exp(-e.deltaY * 0.0012) });
         },
         { passive: false }
       );
       frame.addEventListener("dblclick", () => {
-        if (this.worker) this.worker.postMessage({ type: "orbit-reset" });
+        if (!this.worker) return;
+        if (this._orbitRaf) cancelAnimationFrame(this._orbitRaf);
+        this._orbitRaf = 0;
+        this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
+        this.worker.postMessage({ type: "orbit-reset" });
+      });
+    }
+
+    _queueOrbit(delta) {
+      this._orbitDelta.dyaw += delta.dyaw || 0;
+      this._orbitDelta.dpitch += delta.dpitch || 0;
+      this._orbitDelta.dzoom *= delta.dzoom || 1;
+      if (this._orbitRaf) return;
+      this._orbitRaf = requestAnimationFrame(() => {
+        this._orbitRaf = 0;
+        if (!this.worker) return;
+        const payload = this._orbitDelta;
+        this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
+        this.worker.postMessage({ type: "orbit", ...payload });
       });
     }
 
@@ -361,13 +392,18 @@
 
     _dims() {
       const rect = this.frame.getBoundingClientRect();
+      const width = Math.max(280, Math.round(rect.width));
+      const height = Math.max(240, Math.round(rect.height));
+      const pixelBudget = 2200000;
+      const requestedDpr = Math.min(1.5, window.devicePixelRatio || 1);
+      const budgetDpr = Math.sqrt(pixelBudget / Math.max(1, width * height));
       return {
-        width: Math.max(320, Math.round(rect.width)),
-        height: Math.max(240, Math.round(rect.height)),
+        width,
+        height,
         // Cap at 1.5 rather than 2: on a Retina display dpr=2 means 4x the
         // pixels to fill every frame, which dominates the cost of fill-heavy
         // 3D scenes. 1.5 still looks crisp and roughly halves the fill work.
-        dpr: Math.min(1.5, window.devicePixelRatio || 1),
+        dpr: Math.max(0.75, Math.min(requestedDpr, budgetDpr)),
       };
     }
 
@@ -382,10 +418,11 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=24");
+      const worker = new Worker("./sandbox-worker.js?v=25");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
+      this._lastDims = d;
       worker.postMessage(
         { type: "init", canvas: offscreen, width: d.width, height: d.height, dpr: d.dpr, theme: currentTheme() },
         [offscreen]
@@ -479,6 +516,9 @@
     _resize() {
       if (!this.worker || !this.ready) return;
       const d = this._dims();
+      const prev = this._lastDims;
+      if (prev && prev.width === d.width && prev.height === d.height && Math.abs(prev.dpr - d.dpr) < 0.001) return;
+      this._lastDims = d;
       this.worker.postMessage({
         type: "resize",
         width: d.width,
