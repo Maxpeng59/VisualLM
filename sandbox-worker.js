@@ -59,6 +59,7 @@ let running = false;
 let paused = false;
 let speed = 1;
 let suspended = false; // true when the tab is hidden — stop drawing to save CPU
+let needsRender = false; // repaint paused scenes only when their visible state changes
 
 // User-driven camera orbit, applied on top of whatever yaw/pitch the scene
 // sets. Updated by "orbit" messages from the main thread (canvas drag/wheel),
@@ -180,7 +181,7 @@ function makeHelpers() {
       const size = opts.size || 16;
       const weight = opts.weight || 500;
       const family =
-        opts.font || "'Inter', system-ui, -apple-system, sans-serif";
+        opts.font || "system-ui, -apple-system, 'Segoe UI', sans-serif";
       ctx.font = `${weight} ${size}px ${family}`;
       ctx.fillStyle = opts.color || COLORS.ink;
       ctx.textAlign = opts.align || "left";
@@ -333,7 +334,7 @@ function makeHelpers() {
           ctx.strokeStyle = opts.color || COLORS.grid;
           ctx.lineWidth = 1;
           ctx.fillStyle = COLORS.sub;
-          ctx.font = "12px 'Inter', sans-serif";
+          ctx.font = "12px system-ui, -apple-system, 'Segoe UI', sans-serif";
           for (let gx = Math.ceil(xMin / stepX) * stepX; gx <= xMax + 1e-9; gx += stepX) {
             ctx.beginPath();
             ctx.moveTo(X(gx), box.y);
@@ -373,7 +374,7 @@ function makeHelpers() {
                 ? v.toExponential(0)
                 : +v.toFixed(2) + "";
             ctx.fillStyle = opts.tickColor || COLORS.sub;
-            ctx.font = "11px 'Inter', sans-serif";
+            ctx.font = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "top";
             for (let gx = Math.ceil(xMin / stepX) * stepX; gx <= xMax + 1e-9; gx += stepX) {
@@ -965,11 +966,14 @@ function tick() {
   }
   lastWall = now;
 
-  if (sceneFn) {
+  let renderedThisTick = false;
+  if (sceneFn && (!paused || needsRender)) {
     try {
       ctx.clearRect(0, 0, logicalW, logicalH);
       sceneFn(ctx, simTime);  // H is a global (see compile())
       everRendered = true;
+      renderedThisTick = true;
+      needsRender = false;
       consecutiveErrors = 0;
     } catch (err) {
       consecutiveErrors++;
@@ -987,7 +991,7 @@ function tick() {
     }
   }
 
-  frameCount++;
+  if (renderedThisTick) frameCount++;
   // Heartbeat on the first clean frame (so the main thread's run() promise
   // resolves ~immediately rather than after ~20 frames), then every 20 frames.
   if (everRendered && (frameCount === 1 || frameCount % 20 === 0)) {
@@ -1004,7 +1008,7 @@ function tick() {
   // the work. Without this, a scene that takes 10ms to draw runs at ~37fps
   // (10 + 16.7) instead of 60. Subtract the time this frame already spent.
   const work = performance.now() - now;
-  loopTimer = setTimeout(tick, Math.max(0, FRAME_MS - work));
+  loopTimer = setTimeout(tick, paused ? 250 : Math.max(0, FRAME_MS - work));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1042,6 +1046,7 @@ self.onmessage = (e) => {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(dpr, dpr);
       seedConvenienceGlobals(); // defaults capture canvas center/box at creation
+      needsRender = true;
       break;
     }
     case "run": {
@@ -1060,6 +1065,7 @@ self.onmessage = (e) => {
         frameCount = 0;
         consecutiveErrors = 0;
         everRendered = false;
+        needsRender = true;
         paused = false;
         lastWall = performance.now();
         if (!running) {
@@ -1080,6 +1086,7 @@ self.onmessage = (e) => {
       break;
     case "resume":
       paused = false;
+      needsRender = true;
       lastWall = performance.now();
       break;
     case "speed":
@@ -1101,6 +1108,7 @@ self.onmessage = (e) => {
       // immediately — no recompile, no flicker.
       if (m.values && typeof m.values === "object") {
         for (const k in m.values) curParams[k] = m.values[k];
+        needsRender = true;
       }
       break;
     case "orbit":
@@ -1109,16 +1117,21 @@ self.onmessage = (e) => {
       orbit.yaw += m.dyaw || 0;
       orbit.pitch = clamp(orbit.pitch + (m.dpitch || 0), -1.45, 1.45);
       if (m.dzoom) orbit.zoom = clamp(orbit.zoom * m.dzoom, 0.35, 4);
+      needsRender = true;
       break;
     case "orbit-reset":
       orbit.yaw = 0;
       orbit.pitch = 0;
       orbit.zoom = 1;
+      needsRender = true;
       break;
     case "theme":
       // Live theme switch from the main thread. Mutates COLORS/PALETTE in place
       // so the running scene redraws in the new palette next frame — no recompile.
-      if (m.theme) applyTheme(m.theme);
+      if (m.theme) {
+        applyTheme(m.theme);
+        needsRender = true;
+      }
       break;
     case "stop":
       running = false;
