@@ -1,0 +1,58 @@
+{
+  "format": "visuallm-dlc/1",
+  "id": "physics-lab",
+  "name": "Physics Lab",
+  "description": "Mechanics, waves, and electromagnetism — 218 demos across core and AP Physics, plus a wave-interference lab.",
+  "category": "physics",
+  "icon": "🔬",
+  "source": "official",
+  "version": "1.0",
+  "areas": [
+    "Physics",
+    "AP Physics"
+  ],
+  "experiments": [
+    {
+      "id": "exp-wave-superposition",
+      "title": "Wave Superposition",
+      "blurb": "Add two travelling waves and see interference — tune amplitudes and wavenumbers to build beats and standing patterns.",
+      "area": "Physics",
+      "topic": "Experiments",
+      "params": [
+        {
+          "name": "a1",
+          "label": "amplitude A₁",
+          "min": 0,
+          "max": 2,
+          "step": 0.1,
+          "value": 1.2
+        },
+        {
+          "name": "k1",
+          "label": "wavenumber k₁",
+          "min": 0.5,
+          "max": 4,
+          "step": 0.1,
+          "value": 1
+        },
+        {
+          "name": "a2",
+          "label": "amplitude A₂",
+          "min": 0,
+          "max": 2,
+          "step": 0.1,
+          "value": 0.8
+        },
+        {
+          "name": "k2",
+          "label": "wavenumber k₂",
+          "min": 0.5,
+          "max": 4,
+          "step": 0.1,
+          "value": 2
+        }
+      ],
+      "code": "H.background();\nconst v = H.plot2d({ xMin: -6.5, xMax: 6.5, yMin: -4.5, yMax: 4.5 });\nv.grid(); v.axes();\nconst a1 = P.a1, k1 = P.k1, a2 = P.a2, k2 = P.k2;\nconst w1 = (x) => a1 * Math.sin(k1 * x - t);\nconst w2 = (x) => a2 * Math.sin(k2 * x - t);\nv.fn(w1, { color: H.colors.good, width: 1.5 });\nv.fn(w2, { color: H.colors.violet, width: 1.5 });\nv.fn((x) => w1(x) + w2(x), { color: H.colors.accent, width: 3 });\nH.text('Superposition:  y = A\\u2081sin(k\\u2081x\\u2212t) + A\\u2082sin(k\\u2082x\\u2212t)', 16, 24, { color: H.colors.ink, size: 15, weight: 700 });\nH.text('A1=' + a1.toFixed(1) + '  k1=' + k1.toFixed(1) + '    A2=' + a2.toFixed(1) + '  k2=' + k2.toFixed(1), 16, 48, { color: H.colors.sub, size: 13 });"
+    }
+  ]
+}

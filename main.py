@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 import threading
 import time
@@ -21,7 +22,16 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+# When bundled by PyInstaller, the static assets + validate_scene.js live in the
+# unpacked bundle dir (sys._MEIPASS), not beside a source file. Harmless when
+# not frozen (falls back to this file's directory). _MEIPASS is injected by the
+# PyInstaller bootloader at runtime and isn't in the type stubs, so read it via
+# getattr to keep static type-checkers (Pylance/Pyright) quiet.
+_meipass = getattr(sys, "_MEIPASS", None)
+if getattr(sys, "frozen", False) and _meipass:
+    BASE_DIR = Path(_meipass)
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 
 # Hard caps for the in-memory resource store (single-user local app).
 MAX_RESOURCES = 12
@@ -34,15 +44,6 @@ MAX_CONTEXT_PER_RESOURCE = 18_000     # chars used per generation/chat turn
 # preventing a malicious `Content-Length: 999999999` from hanging a worker
 # thread on `rfile.read(huge_n)` (which would either OOM or wait forever).
 MAX_REQUEST_BODY_BYTES = 4 * 1024 * 1024
-
-# --- Ollama (local) is used for the tutor chat and as an offline fallback. ---
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-PREFERRED_MODELS = (
-    "qwen2.5:7b",
-    "llama3.2",
-    "llama3.1:8b",
-    "phi4-mini",
-)
 
 # --- Claude (cloud) is the primary brain for generating animation code. ---
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
@@ -70,8 +71,8 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 # Abuse protection (the app may be exposed to the public internet)      #
 # ===================================================================== #
 #
-# Every /api POST burns either local compute (Ollama) or the operator's paid
-# API credits (Claude/OpenAI/Gemini), so when published we (a) rate-limit per
+# Every /api POST can burn the operator's paid API credits (Claude/OpenAI/
+# Gemini), so when published we (a) rate-limit per
 # client IP with a sliding 60 s window and (b) optionally require a shared
 # access code (VISUALLM_ACCESS_CODE) so only people you invite can generate.
 
@@ -155,59 +156,11 @@ def send_json(handler: SimpleHTTPRequestHandler, status: HTTPStatus, payload: di
 
 
 # ===================================================================== #
-# Ollama bridge                                                         #
-# ===================================================================== #
-
-
-def ollama_request(path: str, payload: dict | None = None, timeout: float = 60.0) -> dict:
-    body = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"{OLLAMA_URL}{path}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST" if body is not None else "GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        details = error.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(details or f"Ollama returned HTTP {error.code}.") from error
-    except urllib.error.URLError as error:
-        reason = getattr(error, "reason", error)
-        raise RuntimeError(f"Could not reach Ollama at {OLLAMA_URL}. {reason}") from error
-
-
-def fetch_ollama_models() -> list[dict]:
-    response = ollama_request("/api/tags", timeout=10.0)
-    return response.get("models", [])
-
-
-def choose_ollama_model(models: list[dict]) -> str:
-    configured = os.environ.get("OLLAMA_MODEL", "").strip()
-    if configured:
-        return configured
-    available = [m.get("name", "") for m in models]
-    for candidate in PREFERRED_MODELS:
-        if candidate in available:
-            return candidate
-    return available[0] if available else PREFERRED_MODELS[0]
-
-
-def ollama_available() -> tuple[bool, str | None]:
-    try:
-        fetch_ollama_models()
-        return True, None
-    except RuntimeError as error:
-        return False, str(error)
-
-
-# ===================================================================== #
 # Resource store (uploaded reference material)                          #
 # ===================================================================== #
 #
 # Single-user, in-memory. Files are kept as text so both the generator
-# (Claude) and the tutor (Ollama/Claude) can ground their output in them.
+# (Claude) and the tutor (Claude/OpenAI/Gemini) can ground their output in them.
 # Binary files are rejected; users upload notes, problem sets, lecture
 # excerpts, code, datasets — anything text-ish.
 
@@ -420,6 +373,13 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
       the EXPLANATION: sweep the highlight through the parts, pulse the region
       being discussed, orbit the camera, or step through stages with
       `const phase = Math.floor(t % 9 / 3);`.
+    - KEEP MOVING SUBJECTS IN FRAME. Motion must LOOP, never drift away. Do NOT
+      write `x = speed * t` (the object sails off-screen and never comes back).
+      Instead oscillate — `x = A * Math.sin(t)` — or wrap — `x = (t * v) % span`
+      — or reset a phase with `t % period`. A car passing an observer should
+      loop back and pass again; a wave should keep propagating across the SAME
+      visible window. If after a few seconds your main subject would leave the
+      canvas, the scene is rejected.
 
     ### Rule 2 — every scene MUST BE LABELED with real values
 
@@ -517,6 +477,26 @@ SCENE_SYSTEM_PROMPT = textwrap.dedent(
     so it reads as 3D even before they touch it.
 
     ## Style and pedagogy
+
+    ### Teach the mechanism — do not just solve their problem
+
+    The point of every scene is to help the learner UNDERSTAND, not to be an
+    answer key. If the prompt is really a specific problem ("a ball thrown at
+    22 m/s at 58 deg, find the range"), do NOT just compute the number and show
+    it as the answer — that does the student's work for them. Instead reveal the
+    MECHANISM that produces it: the parabola forming, the velocity components,
+    why it peaks where it does, so the learner can see the structure and reason
+    to the result themselves. Prefer the general relationship over a single
+    instance — SWEEP the parameter (let the point `a`, the angle, or the
+    harmonic count vary with `t`) so they watch how it behaves across cases, not
+    only at their one value. Make labels EXPLAIN ("slope = f'(a): watch it flip
+    sign at the peak"), not just state a result; use the bullets and
+    student_prompts to provoke prediction, not to spoon-feed the solution.
+
+    This is NOT a license to be vague. Scenes stay concrete, runnable, and
+    labeled, and a live readout of a CHANGING quantity is good teaching — it
+    makes the relationship visible. The line: illuminate the mechanism (teach)
+    vs. hand over the one specific answer to their assigned problem (solve).
 
     - Teach the idea. Label axes, key points, and quantities with `H.text`.
     - Animate the MECHANISM (a moving particle, sweeping angle, growing sum,
@@ -762,9 +742,9 @@ def repair_with_claude(prompt: str, code: str, error: str) -> dict:
     return claude_call_scene([{"type": "text", "text": user_text}])
 
 
-# --- Ollama fallback generation (best-effort; lower quality than Claude). ---
+# --- Shared strict-JSON scene prompt for the non-Claude cloud generators. ---
 
-OLLAMA_SCENE_PROMPT = (
+JSON_SCENE_PROMPT = (
     SCENE_SYSTEM_PROMPT
     + "\n\nReturn STRICT JSON only with keys: title, tag, dimension, equation, "
     "summary, bullets (array of 3 strings), student_prompts (array of 3 strings), "
@@ -783,8 +763,8 @@ def _extract_json_object(raw_text: str) -> dict:
     # Brace-balanced walk: find each complete top-level {...} segment and try
     # to parse it. Handles "prose {a} more {b}" (find+rfind would have sliced
     # both objects into one unparseable blob) and braces inside JSON string
-    # values. Raises json.JSONDecodeError so callers (e.g. generate_with_ollama)
-    # can decide whether to retry.
+    # values. Raises json.JSONDecodeError so callers (e.g. the OpenAI/Gemini
+    # generators) can decide whether to retry.
     depth = 0
     start = -1
     in_str = False
@@ -816,71 +796,6 @@ def _extract_json_object(raw_text: str) -> dict:
                         pass  # try the next balanced segment
                     start = -1
     raise json.JSONDecodeError("No parseable JSON object in model output", text, 0)
-
-
-def generate_with_ollama(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
-    models = fetch_ollama_models()
-    model_name = choose_ollama_model(models)
-    if fix:
-        user = (
-            "Your animation code threw an error. Fix it and return the full scene "
-            "as strict JSON.\n\nRequest:\n" + prompt + "\n\nError:\n" + fix["error"]
-            + "\n\nHow to fix it:\n" + _repair_hint(fix["error"])
-            + "\n\nBroken code:\n" + fix["code"]
-        )
-    else:
-        user = (
-            "Create a STEM visualization for this request:\n\n"
-            + prompt
-            + "\n\n"
-            + _mode_hint(preferred_mode)
-        )
-    resources = resources_context_block()
-    if resources:
-        user += "\n\n" + resources
-    payload = {
-        "model": model_name,
-        "stream": False,
-        "format": "json",
-        "messages": [
-            {"role": "system", "content": OLLAMA_SCENE_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        "options": {"temperature": 0.2},
-        # Tell Ollama to keep the model resident for a while after the
-        # call returns. The next visualize/repair won't pay the cold-load.
-        "keep_alive": "30m",
-    }
-    # Retry once on JSON parse failure: `format: json` produces valid JSON
-    # most of the time, but sampling occasionally emits unterminated strings
-    # / unescaped quotes that break json.loads. A single re-sample at the
-    # same temperature usually succeeds and is much cheaper than surfacing
-    # a hard "Could not generate" to the user.
-    last_parse_err: json.JSONDecodeError | None = None
-    for attempt in range(2):
-        response = ollama_request(
-            "/api/chat",
-            payload=payload,
-            # Generous timeout: a cold load of a 7B model + a complex JSON-mode
-            # generation can take well over 2 minutes the first time. Subsequent
-            # calls run in 10-30s.
-            timeout=420.0,
-        )
-        content = response.get("message", {}).get("content")
-        if not isinstance(content, str):
-            raise RuntimeError("Ollama returned no visualization.")
-        try:
-            plan = _extract_json_object(content)
-        except json.JSONDecodeError as err:
-            last_parse_err = err
-            continue
-        plan["model"] = model_name
-        plan["engine"] = "ollama"
-        return plan
-    # Both attempts produced unparseable JSON — surface the latest parse error.
-    raise RuntimeError(
-        f"Ollama produced invalid JSON twice in a row: {last_parse_err}"
-    )
 
 
 # ===================================================================== #
@@ -1003,7 +918,7 @@ def _scene_user_text(prompt: str, preferred_mode: str, fix: dict | None) -> str:
 
 def generate_with_openai(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
     raw = _openai_chat(
-        OLLAMA_SCENE_PROMPT,
+        JSON_SCENE_PROMPT,
         [{"role": "user", "content": _scene_user_text(prompt, preferred_mode, fix)}],
         json_mode=True,
     )
@@ -1015,7 +930,7 @@ def generate_with_openai(prompt: str, preferred_mode: str, fix: dict | None = No
 
 def generate_with_gemini(prompt: str, preferred_mode: str, fix: dict | None = None) -> dict:
     raw = _gemini_generate(
-        OLLAMA_SCENE_PROMPT,
+        JSON_SCENE_PROMPT,
         [{"role": "user", "content": _scene_user_text(prompt, preferred_mode, fix)}],
         json_mode=True,
     )
@@ -1078,11 +993,25 @@ def _apply_outside_strings(code: str, transform) -> str:
     return "".join(out)
 
 
-def _autofix_math(segment: str) -> str:
-    segment = _MATH_FN_RE.sub(r"Math.\1\2", segment)
-    segment = _BARE_PI_RE.sub("Math.PI", segment)
-    segment = _BARE_TAU_RE.sub("H.TAU", segment)
+def _autofix_math(segment: str, declared: frozenset = frozenset()) -> str:
+    # Never rewrite a name the scene declares itself: a local `const PI = ...`
+    # must not become `const Math.PI = ...` (a syntax error), and a local
+    # `function log(){}` must not be rewritten to `Math.log`.
+    def _fn(m):
+        name = m.group(1)
+        return m.group(0) if name in declared else "Math." + name + m.group(2)
+
+    segment = _MATH_FN_RE.sub(_fn, segment)
+    if "PI" not in declared:
+        segment = _BARE_PI_RE.sub("Math.PI", segment)
+    if "TAU" not in declared:
+        segment = _BARE_TAU_RE.sub("H.TAU", segment)
     return segment
+
+
+# Names the scene declares for itself — excluded from the bare-Math rewrite so
+# we never corrupt an alias like `const PI = Math.PI` or a local `function sin`.
+_DECLARED_RE = re.compile(r"\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)")
 
 
 def autofix_code(code: str) -> str:
@@ -1090,13 +1019,16 @@ def autofix_code(code: str) -> str:
 
     Currently: prefix bare Math functions/constants (the dominant
     "X is not defined" cause). Applied outside strings/comments so labels and
-    comments are never corrupted. Idempotent — running it on already-correct
-    code is a no-op.
+    comments are never corrupted, and never to a name the scene declares itself
+    (so a local `const PI`/`const TAU`/`function log` is left intact rather than
+    rewritten into invalid syntax or the wrong call). Idempotent — running it on
+    already-correct code is a no-op.
     """
     if not code:
         return code
     try:
-        return _apply_outside_strings(code, _autofix_math)
+        declared = frozenset(_DECLARED_RE.findall(code))
+        return _apply_outside_strings(code, lambda seg: _autofix_math(seg, declared))
     except re.error:
         return code
 
@@ -1132,11 +1064,16 @@ def headless_validate(code: str, timeout: float = 6.0) -> dict | None:
     validator is unavailable or itself failed (so callers skip the gate rather
     than wrongly reject a scene).
     """
-    if not code or not code.strip() or not node_validator_available():
+    # Rebind to a local so the guard narrows it to `str` for the type checker:
+    # Pylance/pyright can't carry the non-None proof across the separate
+    # node_validator_available() function (it's a module global). This inline
+    # check is De Morgan-equivalent to `not node_validator_available()`.
+    node_bin = _NODE_BIN
+    if not code or not code.strip() or not node_bin or not _VALIDATOR_PATH.exists():
         return None
     try:
         proc = subprocess.run(
-            [_NODE_BIN, str(_VALIDATOR_PATH)],
+            [node_bin, str(_VALIDATOR_PATH)],
             input=code.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1174,14 +1111,69 @@ def _rewrite_declared_names(span: str) -> str:
       const W = H.W, H = H.H;       (the multi-decl that causes TDZ)
       const W = H.W,\n      H = H.H;  (multi-line)
 
-    A binding identifier is one that appears either:
-      - right after `const|let|var ` (the first declarator), or
-      - right after a comma at the top level of the statement.
+    A binding is a reserved name at bracket depth 0 that is either the first
+    declarator (right after const/let/var) or follows a top-level comma. This is
+    DEPTH-AWARE on purpose: a reserved name used as a VALUE inside ()/[]/{} —
+    `H.lerp(a, b, t)`, `[x, t]`, `H.map(x, 0, 10, t)` — is NOT a declarator and
+    must be left alone, or it becomes an undefined reference (`_t`). The old
+    comma-matching regex renamed those and silently broke very common scenes.
     """
-    pattern = re.compile(
-        r"(\b(?:const|let|var)\s+|,\s*)(" + "|".join(_RESERVED_BINDINGS) + r")\b"
-    )
-    return pattern.sub(lambda m: f"{m.group(1)}_{m.group(2)}", span)
+    m = re.match(r"\s*(?:const|let|var)\b", span)
+    if not m:
+        return span
+    reserved = set(_RESERVED_BINDINGS)
+    out = [span[: m.end()]]
+    i, n = m.end(), len(span)
+    depth = 0
+    quote = None        # active string/template delimiter, or None
+    expect = True       # the next depth-0 identifier is a declarator binding
+    while i < n:
+        ch = span[i]
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(span[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+            expect = False
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ")]}":
+            depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "," and depth == 0:
+            expect = True
+            out.append(ch)
+            i += 1
+            continue
+        if expect and depth == 0 and (ch.isalpha() or ch in "_$"):
+            j = i
+            while j < n and (span[j].isalnum() or span[j] in "_$"):
+                j += 1
+            ident = span[i:j]
+            out.append("_" + ident if ident in reserved else ident)
+            expect = False
+            i = j
+            continue
+        if not ch.isspace():
+            expect = False
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def sanitize_code(code: object) -> str:
@@ -1389,11 +1381,15 @@ def evaluate_scene(code: str) -> dict:
         return {
             "fatal": True,
             "error": (
-                "Everything was drawn OFF-SCREEN — you mixed coordinate spaces. "
-                "H.line/H.circle/H.text take PIXEL coords (0..H.W, 0..H.H). The "
-                "plot2d view's methods (v.line/v.text/v.dot/v.path/v.circle) take "
-                "DATA coords and map them for you — do NOT wrap their arguments in "
-                "v.X()/v.Y(). Pick one space per call and keep points on-canvas."
+                "The content ended up OFF-SCREEN. Two common causes: (1) mixing "
+                "coordinate spaces — H.line/H.circle/H.text take PIXEL coords "
+                "(0..H.W, 0..H.H), while the plot2d view methods "
+                "(v.line/v.text/v.dot/v.path) take DATA coords and map them for "
+                "you, so never wrap their args in v.X()/v.Y(); (2) UNBOUNDED "
+                "motion that drifts away — e.g. pos = t*4 sails off the edge. "
+                "Make motion LOOP: use t % period, Math.sin(t), or keep the "
+                "moving subject within the visible range. Keep the main content "
+                "on-canvas the whole time."
             ),
             "problems": [],
         }
@@ -1586,6 +1582,59 @@ try:
 except Exception:  # noqa: BLE001 — library is optional; never block startup
     SCENE_LIBRARY = []
 
+# Parameterized "interactive textbook" demos (Algebra 1 -> Precalculus). When a
+# prompt classifies to a curriculum topic, we show one of these — the student
+# edits its values live (the `params`) and reads the explanation — instead of
+# generating code. This is the retrieval-first, fill-in-the-values path.
+try:
+    from demo_library import DEMO_LIBRARY  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    DEMO_LIBRARY = []
+
+# Study Packs (DLC): browse/launch curated + custom demo packs, and generate a
+# custom pack from uploaded material (AI analysis). See dlc.py.
+try:
+    import dlc as _dlc  # type: ignore
+except Exception:  # noqa: BLE001
+    _dlc = None
+
+_DLC_INDEX_CACHE: "list[dict] | None" = None
+
+
+def _library_index() -> list[dict]:
+    """A light index (id/area/topic/title/equation) for DLC pack resolution."""
+    global _DLC_INDEX_CACHE
+    if _DLC_INDEX_CACHE is None:
+        _DLC_INDEX_CACHE = [
+            {
+                "id": d.get("id"),
+                "area": d.get("area"),
+                "topic": d.get("topic"),
+                "title": d.get("title"),
+                "equation": d.get("equation", ""),
+            }
+            for d in DEMO_LIBRARY
+        ]
+    return _DLC_INDEX_CACHE
+
+# Chemistry: a chemical formula renders a 3D molecular structure; a reaction is
+# balanced and shown as reactants -> products with conservation. Known-correct
+# (parsed/computed server-side), so it short-circuits like the demo/library path.
+try:
+    from chemistry import chemistry_scene as _chemistry_scene  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    def _chemistry_scene(_prompt):  # type: ignore
+        return None
+
+# Worked-solution slides: a SPECIFIC problem (real numbers + labels, e.g. a
+# triangle with given sides/angles) renders an animated step-by-step solution
+# using the student's own numbers — distinct from the topic demos.
+try:
+    from solver import solver_scene as _solver_scene  # type: ignore
+except Exception:  # noqa: BLE001 — optional; never block startup
+    def _solver_scene(_prompt):  # type: ignore
+        return None
+
 _scene_cache_lock = threading.Lock()
 _scene_cache: dict[tuple, dict] = {}
 _SCENE_CACHE_MAX = 256
@@ -1622,8 +1671,64 @@ _MATCH_STOPWORDS = frozenset(
     "draw plot with for as its it this that what why over time using see".split()
 )
 
+# --- Equation-form matching ------------------------------------------------
+# A bare equation ("E=mc^2", "F=ma", "PV=nRT") tokenizes to junk ({e,mc,2}) that
+# misses keyword/title matching entirely. So we ALSO match on a normalized
+# equation signature: pull the equation token out of the prompt, normalize it
+# (keeping '=' so the match is anchored and false-positive-resistant), and
+# compare it to each demo's normalized equation / title / equation-keywords.
+_EQ_SUB = str.maketrans({"²": "2", "³": "3", "⁴": "4", "λ": "l", "·": "", "×": "", "−": "-", "–": "-"})
 
-def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str) -> float:
+
+def _norm_eq(s: str) -> str:
+    s = (s or "").lower().translate(_EQ_SUB)
+    return re.sub(r"[^a-z0-9=+/]", "", s)
+
+
+def _prompt_equation(prompt: str) -> str:
+    """Extract + normalize the equation token from a prompt, or '' if none.
+    'show me E=mc^2' -> 'e=mc2';  'F = ma' -> 'f=ma'."""
+    if not prompt or "=" not in prompt:
+        return ""
+    tight = re.sub(r"\s*([=+\-*/^·×])\s*", r"\1", prompt)
+    cands = [tok for tok in tight.split() if "=" in tok]
+    if not cands:
+        return ""
+    return _norm_eq(max(cands, key=len))
+
+
+def _sort_runs(s: str) -> str:
+    """Sort each run of >=2 letters so a product is order-independent:
+    'mc2' and 'cm2' both -> 'cm2' (handles E=CM^2 written for E=mc^2)."""
+    return re.sub(r"[a-z]{2,}", lambda m: "".join(sorted(m.group(0))), s)
+
+
+def _equation_boost(sc: dict, peq: str) -> float:
+    """Score boost if the prompt's equation matches this scene's equation form."""
+    if not peq or len(peq) < 4:
+        return 0.0
+    sigs = [_norm_eq(sc.get("equation", "")), _norm_eq(sc.get("title", ""))]
+    sigs += [_norm_eq(k) for k in sc.get("keywords", []) if "=" in str(k)]
+    sigs = [s for s in sigs if s]
+    boost = 0.0
+    for sig in sigs:
+        if peq == sig:
+            return 6.0
+        if peq in sig or (len(sig) >= 4 and sig in peq):
+            boost = max(boost, 5.0)
+    if boost == 0.0:
+        # Fall back to order-independent (commutative-product) matching.
+        peqs = _sort_runs(peq)
+        for sig in sigs:
+            ss = _sort_runs(sig)
+            if peqs == ss:
+                return 5.0
+            if (len(peqs) >= 4 and peqs in ss) or (len(ss) >= 4 and ss in peqs):
+                boost = max(boost, 4.0)
+    return boost
+
+
+def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str, peq: str = "") -> float:
     score = 0.0
     for kw in sc.get("keywords", []):
         k = kw.lower().strip()
@@ -1639,10 +1744,31 @@ def _scene_score(sc: dict, ptext: str, ptoks: set, mode: str) -> float:
     tag_toks = _tokenize(sc.get("tag", "")) - _MATCH_STOPWORDS
     score += 1.0 * len(title_toks & ptoks)
     score += 0.5 * len(tag_toks & ptoks)
+    # A bare/embedded equation matches the scene's equation form directly.
+    score += _equation_boost(sc, peq)
     # Respect an explicit 2D/3D preference.
     if mode in ("2d", "3d") and sc.get("dimension", "").lower() != mode:
         score -= 1.5
     return score
+
+
+# Everyday words that are ALSO demo keywords. A long natural-language prompt
+# ("how do vaccines work", "power dynamics in a relationship") whose only match
+# comes from one of these shouldn't confidently serve a wrong demo.
+_WEAK_TOPIC_WORDS = frozenset(
+    "work power field function real point line value model rate range table mean series root".split()
+)
+
+
+def _weak_prose_match(prompt: str, sc: dict, score: float) -> bool:
+    """True if a borderline match for a multi-word sentence rests ONLY on common
+    everyday words — in which case we'd rather show the honest 'no clear topic'
+    fallback than a confidently-wrong demo."""
+    if score > 2.0 or len((prompt or "").split()) < 4:
+        return False
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks2 = (_tokenize(prompt) - _MATCH_STOPWORDS) - _WEAK_TOPIC_WORDS
+    return _scene_score(sc, ptext, ptoks2, "auto", _prompt_equation(prompt)) < 2.0
 
 
 def _library_scored(prompt: str, mode: str) -> list[tuple[dict, float]]:
@@ -1651,7 +1777,8 @@ def _library_scored(prompt: str, mode: str) -> list[tuple[dict, float]]:
         return []
     ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
     ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
-    scored = [(sc, _scene_score(sc, ptext, ptoks, mode)) for sc in SCENE_LIBRARY]
+    peq = _prompt_equation(prompt)
+    scored = [(sc, _scene_score(sc, ptext, ptoks, mode, peq)) for sc in SCENE_LIBRARY]
     scored = [t for t in scored if t[1] > 0]
     scored.sort(key=lambda t: t[1], reverse=True)
     return scored
@@ -1684,12 +1811,178 @@ def _has_cloud() -> bool:
     return bool(_cloud_generators())
 
 
-def plan_visualization(prompt: str, preferred_mode: str) -> dict:
+# --- Parameterized demo classification (the "fill in the values" path) -------
+
+def _demo_scored(prompt: str) -> list[tuple[dict, float]]:
+    """All demos scored against the prompt, best first (score > 0). Reuses the
+    library scorer; mode is 'auto' so a 2D demo isn't penalized by a 3D hint."""
+    if not DEMO_LIBRARY:
+        return []
+    ptext = " " + re.sub(r"\s+", " ", (prompt or "").lower()) + " "
+    ptoks = _tokenize(prompt) - _MATCH_STOPWORDS
+    peq = _prompt_equation(prompt)
+    scored = [(d, _scene_score(d, ptext, ptoks, "auto", peq)) for d in DEMO_LIBRARY]
+    scored = [t for t in scored if t[1] > 0]
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored
+
+
+def demo_match(prompt: str) -> tuple[dict | None, float]:
+    """Classify a prompt to its best curriculum demo (None = no clear topic)."""
+    scored = _demo_scored(prompt)
+    return scored[0] if scored else (None, 0.0)
+
+
+def _demo_scene(demo: dict, prompt: str) -> dict:
+    """Shape a demo into a scene response carrying its editable `params` and the
+    teaching `explanation` the UI renders alongside the live graph."""
+    expl = demo.get("explanation", "")
+    bullets = [str(b) for b in demo.get("bullets", [])][:4] or [
+        "Drag the sliders on the right and watch the graph respond.",
+        "The picture updates live as you change each value.",
+    ]
+    return {
+        "title": demo.get("title", "Interactive demo"),
+        "tag": demo.get("area", "STEM"),
+        "dimension": "3D" if str(demo.get("dimension", "")).lower().startswith("3") else "2D",
+        "equation": demo.get("equation", ""),
+        "summary": expl,
+        "bullets": bullets,
+        "student_prompts": [str(p) for p in demo.get("student_prompts", [])][:4] or [
+            "Why does changing this value have that effect on the graph?",
+            "What happens at the extreme settings?",
+            "How does the picture connect back to the formula?",
+        ],
+        "code": sanitize_code(demo.get("code", "")),
+        "params": [dict(p) for p in demo.get("params", [])],
+        "explanation": expl,
+        "topic": demo.get("topic", ""),
+        "area": demo.get("area", ""),
+        "demo_id": demo.get("id", ""),
+        "model": "demo",
+        "engine": "demo",
+        "prompt": prompt,
+        "from_demo": True,
+    }
+
+
+def _chemistry_response(sc: dict, prompt: str) -> dict:
+    """Shape a chemistry scene-content dict into a full scene response. `code`
+    is sanitized here (mirrors _demo_scene / _library_scene)."""
+    summary = sc.get("summary", "")
+    return {
+        "title": sc.get("title", "Chemistry"),
+        "tag": sc.get("tag", "Chemistry"),
+        "dimension": "3D" if str(sc.get("dimension", "")).lower().startswith("3") else "2D",
+        "equation": sc.get("equation", ""),
+        "summary": summary,
+        "bullets": [str(b) for b in sc.get("bullets", [])][:4],
+        "student_prompts": [str(p) for p in sc.get("student_prompts", [])][:4],
+        "code": sanitize_code(sc.get("code", "")),
+        "explanation": summary,
+        "model": "chemistry",
+        "engine": "chemistry",
+        "prompt": prompt,
+        "from_chemistry": True,
+        "chem_kind": sc.get("kind", ""),
+    }
+
+
+def _solver_response(sc: dict, prompt: str) -> dict:
+    """Shape a worked-solution (step-by-step slides) scene into a full response."""
+    summary = sc.get("summary", "")
+    return {
+        "title": sc.get("title", "Worked solution"),
+        "tag": sc.get("tag", "Worked solution"),
+        "dimension": "2D",
+        "equation": sc.get("equation", ""),
+        "summary": summary,
+        "bullets": [str(b) for b in sc.get("bullets", [])][:4],
+        "student_prompts": [str(p) for p in sc.get("student_prompts", [])][:4],
+        "code": sanitize_code(sc.get("code", "")),
+        "explanation": summary,
+        "model": "solver",
+        "engine": "solver",
+        "prompt": prompt,
+        "from_solver": True,
+        "solver_kind": sc.get("kind", ""),
+    }
+
+
+# Demo fires on a clear topic hit (a couple of keyword/title matches). Below
+# this, fall through to the scene library / generative path.
+_DEMO_THRESHOLD = 2.0
+
+
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Simplified Chinese",
+    "es": "Spanish",
+    "hi": "Hindi",
+    "fr": "French",
+    "de": "German",
+}
+
+
+def normalize_language(value: object) -> str:
+    """Return one of the six UI language codes; unknown values fall back safely."""
+    code = str(value or "en").strip().lower().split("-", 1)[0]
+    return code if code in _LANGUAGE_NAMES else "en"
+
+
+def _prompt_for_language(prompt: str, language: str) -> str:
+    """Ask model-backed scenes to localize teaching text without altering math."""
+    code = normalize_language(language)
+    if code == "en":
+        return prompt
+    return (
+        prompt
+        + "\n\nOUTPUT LANGUAGE: Write the title, summary, teaching bullets, "
+        + "parameter labels, and all learner-facing canvas text in "
+        + _LANGUAGE_NAMES[code]
+        + ". Keep equations, variable names, and units universal."
+    )
+
+
+def plan_visualization(prompt: str, preferred_mode: str, language: str = "en") -> dict:
+    language = normalize_language(language)
+    cache_mode = preferred_mode if language == "en" else f"{preferred_mode}:{language}"
     # 1. Exact-prompt cache — instant repeat for an already-validated scene.
-    cached = scene_cache_get(prompt, preferred_mode)
+    cached = scene_cache_get(prompt, cache_mode)
     if cached:
         cached["cached"] = True
         return cached
+
+    # 1.4 Chemistry — a chemical formula renders a 3D molecular structure; a
+    #     reaction is balanced and shown as reactants -> products. This is a
+    #     strong, specific signal (an arrow or a real formula), so it fires
+    #     before the curriculum demo / library so "CH4" or "2H2+O2->2H2O" is
+    #     never mis-routed to a math demo.
+    chem = _chemistry_scene(prompt)
+    if chem is not None:
+        result = _chemistry_response(chem, prompt)
+        scene_cache_put(prompt, cache_mode, result)
+        return result
+
+    # 1.45 Worked solution — a SPECIFIC numeric problem (e.g. a triangle with
+    #      given sides/angles) renders animated step-by-step slides that solve it
+    #      WITH the student's numbers. Fires before the topic demo so a concrete
+    #      problem gets a worked solution, while "law of sines" still teaches the
+    #      general method. Requires real numbers + labels, so topics don't trigger it.
+    solv = _solver_scene(prompt)
+    if solv is not None:
+        result = _solver_response(solv, prompt)
+        scene_cache_put(prompt, cache_mode, result)
+        return result
+
+    # 1.5 Curriculum demo — the interactive "fill in the values" path. If the
+    #     prompt clearly names an Algebra-1..Precalc topic, show its parameterized
+    #     demo (editable + explained) rather than generating code. Takes priority
+    #     over the static library so an interactive version wins when both exist.
+    demo, demo_score = demo_match(prompt)
+    if (demo is not None and demo_score >= _DEMO_THRESHOLD
+            and not _weak_prose_match(prompt, demo, demo_score)):
+        return _demo_scene(demo, prompt)
 
     # 2. Strong curated match — instant, known-correct. The bar is high when a
     #    cloud model is available (the user likely wants a custom take), and
@@ -1706,32 +1999,26 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
     # firing on an ambiguous near-tie between unrelated scenes. Base scenes are
     # ordered first, so they win ties.
     confident = lib_score >= 5.0 or (lib_score - runner_up) >= 1.5
-    if lib_scene is not None and lib_score >= strong_threshold and confident:
+    if (lib_scene is not None and lib_score >= strong_threshold and confident
+            and not _weak_prose_match(prompt, lib_scene, lib_score)):
         result = _library_scene(lib_scene, prompt)
-        scene_cache_put(prompt, preferred_mode, result)
+        scene_cache_put(prompt, cache_mode, result)
         return result
 
     # 3. Generate with the provider chain (each validated + repaired server-side).
     errors = []
+    generation_prompt = _prompt_for_language(prompt, language)
     for label, fn in _cloud_generators():
         try:
-            scene = _try_generate(fn, prompt, preferred_mode, label, max_attempts=2)
-            scene_cache_put(prompt, preferred_mode, scene)
+            scene = _try_generate(fn, generation_prompt, preferred_mode, label, max_attempts=2)
+            # Keep internal localization instructions out of subsequent UI and
+            # repair context while retaining the localized generated fields.
+            scene["prompt"] = prompt
+            scene["language"] = language
+            scene_cache_put(prompt, cache_mode, scene)
             return scene
         except Exception as error:  # noqa: BLE001
             errors.append(f"{label}: {error}")
-    try:
-        scene = _try_generate(
-            lambda p, m: generate_with_ollama(p, m),
-            prompt,
-            preferred_mode,
-            "Ollama",
-            max_attempts=3,
-        )
-        scene_cache_put(prompt, preferred_mode, scene)
-        return scene
-    except Exception as error:  # noqa: BLE001
-        errors.append(f"Ollama: {error}")
 
     # 4. Every generator failed. A RELEVANT curated scene beats a dead canvas —
     #    but a wrong-topic one is worse than an honest placeholder, so require a
@@ -1765,17 +2052,29 @@ def plan_visualization(prompt: str, preferred_mode: str) -> dict:
             "enable a stronger model (ANTHROPIC_API_KEY / OPENAI_API_KEY / "
             "GEMINI_API_KEY) for more reliable results.",
         )
+    # No cloud key configured at all (errors is empty): the app relies only on
+    # code. Chemistry, reactions, the solver, and the demo library are handled
+    # above with no model — only a genuinely novel free-form prompt reaches here.
+    # Show the friendly placeholder (not a hard error) and point the user at what
+    # works offline plus how to enable AI generation.
+    if not errors:
+        return _fallback_scene(
+            prompt,
+            "No AI model is configured, so free-form prompts can't be generated. "
+            "Try a formula (CH4), a reaction (2H2 + O2 -> 2H2O), or a topic "
+            "(projectile motion) — these run with no key. For custom prompts, set "
+            "ANTHROPIC_API_KEY (and `pip install anthropic`) to enable Claude.",
+        )
     if any("timed out" in e.lower() or "timeout" in e.lower() for e in errors):
         hint = (
-            "The local model probably hit a cold-start timeout. Try again — "
-            "the model is loaded now and the next call will be much faster."
+            "The model request timed out. Try again, or simplify the prompt — "
+            "complex scenes take longer to generate."
         )
-    elif any("connection" in e.lower() or "could not reach" in e.lower() for e in errors):
-        hint = "Start Ollama (`ollama serve`) or set ANTHROPIC_API_KEY for Claude."
     else:
         hint = (
-            "Set ANTHROPIC_API_KEY (and `pip install anthropic`), "
-            "OPENAI_API_KEY, or GEMINI_API_KEY — or run Ollama locally."
+            "Set ANTHROPIC_API_KEY (and `pip install anthropic`) for Claude, or "
+            "OPENAI_API_KEY / GEMINI_API_KEY. With no key, VisualLM still runs the "
+            "built-in pure-code library (demos, chemistry, step-by-step solver)."
         )
     raise RuntimeError(f"Generator failed ({detail}). {hint}")
 
@@ -1803,18 +2102,11 @@ def repair_visualization(prompt: str, code: str, error: str, where: str = "") ->
             )
         except Exception as e:  # noqa: BLE001
             errors.append(f"{label}: {e}")
-    try:
-        return normalize_scene(
-            generate_with_ollama(prompt, "auto", fix={"code": code, "error": error_ctx}),
-            prompt,
-        )
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"Ollama: {e}")
     raise RuntimeError("Repair failed. " + " | ".join(errors))
 
 
 # ===================================================================== #
-# Tutor chat (Ollama primary, Claude fallback)                          #
+# Tutor chat (Claude / OpenAI / Gemini, cloud only)                     #
 # ===================================================================== #
 
 
@@ -1843,6 +2135,45 @@ def build_tutor_system_prompt(viz: dict) -> str:
         - Warm, clear, and student-friendly. Tie explanations to the animation.
         - Short step-by-step reasoning for math/physics.
         - End with one short follow-up question or practice suggestion.
+
+        SOLVING A PROBLEM — when the student asks you to solve, find, calculate,
+        derive, or "how do I do this", do NOT just give the final answer. Walk
+        through the METHOD so they could repeat it themselves, using exactly
+        these labeled sections (each label on its own line, plain text).
+
+        Assume the student is a TOTAL BEGINNER who may be anxious about math.
+        Make it dumb-proof:
+        - Define every term the first time you use it, in plain everyday words
+          (e.g. "the coefficient — that's just the number multiplying x").
+        - NEVER skip a step. Show every single arithmetic and algebra move on
+          its own line. Do not jump from 2x + 6 = 10 to x = 2; show "subtract 6
+          from both sides: 2x = 4", then "divide both sides by 2: x = 2".
+        - For every move, say WHY it is allowed in one short clause ("to undo
+          the + 6 we do the opposite, subtract 6", "we can divide both sides by
+          the same number and keep them equal").
+        - Short sentences. No jargon without an immediate plain-words gloss. No
+          step should make the student think "wait, how did you get that?".
+
+        Goal: one line naming what we solve for — its symbol and unit.
+
+        What you need: the relationship(s)/formula(s) that apply, plus every
+        known quantity. For each known, give symbol = value (with unit) and say
+        WHERE it comes from: stated in the problem, a known constant, or read
+        off the animation on screen. Call out anything still unknown.
+
+        Steps: numbered. Each step does ONE small thing — name it, say WHY,
+        substitute the specific values RIGHT THERE, do the single arithmetic
+        move, and show the intermediate result with units. If a line of algebra
+        has two moves, split it into two steps. When a step corresponds to
+        something on screen, point to it (e.g. "this is the slope of the tangent
+        line you see sweeping the curve").
+
+        Answer: the final result with units, then a one-line plain-words sanity
+        check (does the sign/size make sense?).
+
+        If the student gave no numbers, solve it symbolically and show exactly
+        where each quantity would be plugged in. Keep every step tiny; still end
+        with one short follow-up question.
 
         Output format — STRICT. The chat window shows plain text only.
         - NO LaTeX of any kind. Do not write \\(...\\), \\[...\\], $...$,
@@ -1875,31 +2206,14 @@ def build_tutor_system_prompt(viz: dict) -> str:
     resources = resources_context_block()
     if resources:
         base += "\n\n" + resources
+    language = normalize_language(viz.get("_response_language"))
+    if language != "en":
+        base += (
+            "\n\nRESPONSE LANGUAGE: Answer entirely in "
+            + _LANGUAGE_NAMES[language]
+            + ". Keep equations, variable names, and units universal."
+        )
     return base
-
-
-def chat_with_ollama(question: str, viz: dict, history: list[dict]) -> dict:
-    models = fetch_ollama_models()
-    model_name = choose_ollama_model(models)
-    messages = [{"role": "system", "content": build_tutor_system_prompt(viz)}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": question})
-    response = ollama_request(
-        "/api/chat",
-        payload={
-            "model": model_name,
-            "stream": False,
-            "messages": messages,
-            "options": {"temperature": 0.3},
-            "keep_alive": "30m",
-        },
-        timeout=240.0,
-    )
-    raw = response.get("message", {}).get("content")
-    answer = raw.strip() if isinstance(raw, str) else ""
-    if not answer:
-        raise RuntimeError("Ollama returned an empty response.")
-    return {"answer": answer, "model": model_name, "engine": "ollama"}
 
 
 def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
@@ -1914,9 +2228,19 @@ def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
     while trimmed and trimmed[0].get("role") != "user":
         trimmed.pop(0)
     messages = trimmed + [{"role": "user", "content": question}]
+    # Adaptive thinking lets the tutor REASON through a "how do I solve this"
+    # question before answering (better step-by-step math correctness) while
+    # staying fast on simple "what does this mean" questions — Claude decides how
+    # much to think per turn. Thinking tokens count against max_tokens, so the cap
+    # is raised well above the old 2000 to leave room for thinking + a thorough,
+    # beginner-proof explanation. medium effort balances interactive latency
+    # against correctness. We only read the text block (thinking blocks, if any,
+    # are skipped by the `type == "text"` filter below).
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=2000,
+        max_tokens=8000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "medium"},
         system=build_tutor_system_prompt(viz),
         messages=messages,
     )
@@ -1928,14 +2252,6 @@ def chat_with_claude(question: str, viz: dict, history: list[dict]) -> dict:
 
 def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
     errors = []
-    # Previously did ollama_available() (probe /api/tags) THEN chat_with_ollama()
-    # (which also fetches /api/tags) — same duplicate-call issue as Bug #45.
-    # Trying chat_with_ollama directly fails just as fast on a refused
-    # connection because fetch_ollama_models has its own 10 s timeout.
-    try:
-        return chat_with_ollama(question, viz, history)
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"Ollama: {e}")
     if claude_available()["available"]:
         try:
             return chat_with_claude(question, viz, history)
@@ -1965,8 +2281,8 @@ def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
         # No backend is configured. Give the same actionable hint that
         # plan_visualization gives, otherwise the user sees a dead end.
         raise RuntimeError(
-            "No tutor backend is available. Start Ollama (`ollama serve`) "
-            "or set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY."
+            "No tutor backend is available. Set ANTHROPIC_API_KEY "
+            "/ OPENAI_API_KEY / GEMINI_API_KEY to enable the AI tutor."
         )
     raise RuntimeError("Tutor unavailable. " + " | ".join(errors))
 
@@ -1977,20 +2293,10 @@ def tutor_chat(question: str, viz: dict, history: list[dict]) -> dict:
 
 
 def get_health() -> dict:
-    # Single Ollama probe — was making 2 HTTP calls per request: ollama_available()
-    # calls fetch_ollama_models() internally, then we called it AGAIN to populate
-    # the model list. With Bug #19's refresh-on-error this fired often enough to
-    # matter. Now we fetch once and derive availability from success/failure.
-    ollama_status = {"available": False, "url": OLLAMA_URL, "error": None}
-    try:
-        models = fetch_ollama_models()
-        ollama_status["available"] = True
-        ollama_status["selected_model"] = choose_ollama_model(models)
-        ollama_status["models"] = [m.get("name") for m in models]
-    except RuntimeError as error:
-        ollama_status["error"] = str(error)
-    # claude_available() does no I/O (env var + import probe) but was still
-    # called twice — once for the dict, once for the generator switch.
+    # The AI relies only on code: a cloud key enables Claude/OpenAI/Gemini, and
+    # with no key the app serves the built-in pure-code library (demos, chemistry,
+    # the step-by-step solver). No local model app (Ollama) is probed or required,
+    # so /api/health does no network I/O — just an env-var + import probe.
     claude_info = claude_available()
     openai_info = openai_available()
     gemini_info = gemini_available()
@@ -2000,12 +2306,9 @@ def get_health() -> dict:
         generator = "openai"
     elif gemini_info["available"]:
         generator = "gemini"
-    elif ollama_status["available"]:
-        generator = "ollama"
     else:
         generator = "none"
     return {
-        "ollama": ollama_status,
         "claude": claude_info,
         "openai": openai_info,
         "gemini": gemini_info,
@@ -2017,11 +2320,125 @@ def get_health() -> dict:
     }
 
 
+def _extract_json(text: str):
+    """Pull the first {...} JSON object out of a possibly fenced model reply."""
+    match = re.search(r"\{.*\}", text or "", re.S)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fetch_link_text(url: str) -> str:
+    """Fetch a user-supplied http(s) link and return its text (desktop only)."""
+    if not re.match(r"^https?://", url):
+        raise ValueError("Links must start with http:// or https://.")
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "VisualLM/1.0"})
+        with urllib.request.urlopen(request, timeout=12) as response:  # noqa: S310
+            raw = response.read(500_000)  # 500KB cap
+    except Exception as err:  # noqa: BLE001
+        raise ValueError(f"Couldn't fetch that link: {err}")
+    text = raw.decode("utf-8", "replace")
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def analyze_to_dlc(payload: dict) -> dict:
+    """AI analysis: turn uploaded material (text or a link) into a custom DLC of
+    generated demos. Reuses the normal Claude generation path per topic."""
+    client = anthropic_client()
+    if client is None:
+        raise RuntimeError(
+            "AI analysis needs Claude — set ANTHROPIC_API_KEY (and `pip install anthropic`)."
+        )
+    material = str(payload.get("material") or "").strip()
+    link = str(payload.get("link") or "").strip()
+    name = (str(payload.get("name") or "Custom Pack").strip() or "Custom Pack")[:80]
+    if link and not material:
+        material = _fetch_link_text(link)
+    if not material:
+        raise ValueError("Provide some material (paste text or a link) to analyze.")
+    material = material[:12_000]
+    max_demos = max(1, min(8, int(payload.get("max_demos") or 6)))
+
+    # 1) Ask Claude for concrete, visualizable topics from the material.
+    system = (
+        "You are building an interactive-demo pack from teaching material. "
+        "Identify the most useful STEM concepts to visualize as interactive, "
+        "slider-driven demos. Respond with ONLY JSON of the form "
+        '{"name": "short pack name", "topics": [{"title": "...", "prompt": "..."}]}. '
+        f"Give at most {max_demos} topics. Each `prompt` is a short instruction to "
+        "generate ONE demo, e.g. 'projectile motion with adjustable launch angle "
+        "and speed'."
+    )
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=2000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": "low"},
+        system=system,
+        messages=[{"role": "user", "content": "Material:\n\n" + material}],
+    )
+    text = next((b.text for b in response.content if b.type == "text"), "").strip()
+    plan = _extract_json(text) or {}
+    topics = plan.get("topics") or []
+    if plan.get("name"):
+        name = str(plan["name"])[:80]
+    if not topics:
+        raise ValueError("Couldn't find teachable concepts in that material.")
+
+    slug = _dlc._slug(name) if _dlc else "custom-pack"
+
+    # 2) Generate a demo per topic (same generator the prompt box uses).
+    demos: list[dict] = []
+    for i, topic in enumerate(topics[:max_demos]):
+        prompt = str(topic.get("prompt") or topic.get("title") or "").strip()
+        if not prompt:
+            continue
+        try:
+            scene = generate_with_claude(prompt, "auto")
+        except Exception:  # noqa: BLE001 — skip a failed topic, keep the rest
+            continue
+        code = sanitize_code(scene.get("code", ""))
+        if not code.strip():
+            continue
+        demos.append({
+            "id": f"{slug}-{i + 1}",
+            "area": "Custom",
+            "topic": str(topic.get("title") or "Generated"),
+            "title": str(topic.get("title") or scene.get("title") or prompt)[:80],
+            "equation": scene.get("equation", ""),
+            "code": code,
+            "params": [dict(p) for p in scene.get("params", [])],
+            "explanation": scene.get("summary", "") or scene.get("explanation", ""),
+            "bullets": [str(b) for b in scene.get("bullets", [])][:4],
+        })
+    if not demos:
+        raise RuntimeError("The generator didn't produce any usable demos. Try different material.")
+
+    return {
+        "format": "visuallm-dlc/1",
+        "id": f"{slug}-ai",
+        "name": name,
+        "description": f"AI-generated from your material — {len(demos)} demos.",
+        "category": "custom",
+        "icon": "✨",
+        "source": "ai",
+        "version": "1.0",
+        "demos": demos,
+        "experiments": [],
+    }
+
+
 class VisualLMHandler(SimpleHTTPRequestHandler):
     # Cap per-request socket reads so a malicious / hung client that declares
     # Content-Length: N but only sends part of it can't pin a worker thread
     # forever on rfile.read(N). 30 s is far more than any legitimate body
-    # (the slow path is a Claude/Ollama call, which happens server-side after
+    # (the slow path is a cloud model call, which happens server-side after
     # the body is fully read). Without this, ThreadingHTTPServer's default
     # socket timeout is None — the thread hangs until TCP keepalive expires.
     timeout = 30
@@ -2053,6 +2470,15 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/resources":
             send_json(self, HTTPStatus.OK, {"resources": list_resources()})
+            return
+        if parsed.path == "/api/packs":
+            if _dlc is None:
+                send_json(self, HTTPStatus.OK, {"packs": []})
+                return
+            idx = _library_index()
+            packs = [_dlc.pack_meta(p, idx) for p in _dlc.official_packs()]
+            packs += [_dlc.pack_meta(p, idx) for p in _dlc.custom_packs()]
+            send_json(self, HTTPStatus.OK, {"packs": packs})
             return
         if parsed.path == "/":
             self.path = "/index.html"
@@ -2091,7 +2517,12 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
-        routes = {"/api/visualize", "/api/repair", "/api/chat", "/api/resources"}
+        routes = {
+            "/api/visualize", "/api/repair", "/api/chat", "/api/resources",
+            "/api/pack", "/api/demo",
+            "/api/dlc/import", "/api/dlc/remove", "/api/dlc/export",
+            "/api/analyze",
+        }
         if parsed.path not in routes:
             send_json(self, HTTPStatus.NOT_FOUND, {"error": "Unknown API route."})
             return
@@ -2133,6 +2564,18 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
                 self._handle_repair(payload)
             elif parsed.path == "/api/resources":
                 self._handle_resource_upload(payload)
+            elif parsed.path == "/api/pack":
+                self._handle_pack(payload)
+            elif parsed.path == "/api/demo":
+                self._handle_demo(payload)
+            elif parsed.path == "/api/dlc/import":
+                self._handle_dlc_import(payload)
+            elif parsed.path == "/api/dlc/remove":
+                self._handle_dlc_remove(payload)
+            elif parsed.path == "/api/dlc/export":
+                self._handle_dlc_export(payload)
+            elif parsed.path == "/api/analyze":
+                self._handle_analyze(payload)
             else:
                 self._handle_chat(payload)
         except Exception:  # noqa: BLE001
@@ -2155,16 +2598,73 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
             {"resource": entry, "resources": list_resources()},
         )
 
+    # ---- Study Packs (DLC) ----
+    def _handle_pack(self, payload: dict) -> None:
+        pack = _dlc.find_pack(payload.get("id")) if _dlc else None
+        if not pack:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Pack not found."})
+            return
+        send_json(self, HTTPStatus.OK, _dlc.pack_catalog(pack, _library_index()))
+
+    def _handle_demo(self, payload: dict) -> None:
+        demo_id = payload.get("id")
+        demo = next((d for d in DEMO_LIBRARY if d.get("id") == demo_id), None)
+        if demo is None and _dlc is not None:
+            demo = _dlc.find_embedded(demo_id)
+        if demo is None:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Demo not found."})
+            return
+        send_json(self, HTTPStatus.OK, _demo_scene(demo, demo.get("title", "")))
+
+    def _handle_dlc_import(self, payload: dict) -> None:
+        obj = payload.get("dlc")
+        errors = _dlc.validate(obj) if _dlc else ["DLC engine unavailable."]
+        if errors:
+            send_json(
+                self,
+                HTTPStatus.BAD_REQUEST,
+                {"error": "Invalid pack — " + " ".join(errors[:3]), "errors": errors},
+            )
+            return
+        saved = _dlc.import_pack(obj)
+        send_json(self, HTTPStatus.OK, {"ok": True, "pack": _dlc.pack_meta(saved, _library_index())})
+
+    def _handle_dlc_remove(self, payload: dict) -> None:
+        ok = _dlc.remove_pack(payload.get("id")) if _dlc else False
+        send_json(self, HTTPStatus.OK, {"ok": bool(ok)})
+
+    def _handle_dlc_export(self, payload: dict) -> None:
+        pack = _dlc.find_pack(payload.get("id")) if _dlc else None
+        if not pack:
+            send_json(self, HTTPStatus.NOT_FOUND, {"error": "Pack not found."})
+            return
+        send_json(self, HTTPStatus.OK, {"dlc": pack})
+
+    def _handle_analyze(self, payload: dict) -> None:
+        try:
+            dlc_obj = analyze_to_dlc(payload)
+        except ValueError as err:
+            send_json(self, HTTPStatus.BAD_REQUEST, {"error": str(err)})
+            return
+        except RuntimeError as err:
+            send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})
+            return
+        if _dlc is not None:
+            _dlc.import_pack(dlc_obj)
+        meta = _dlc.pack_meta(dlc_obj, _library_index()) if _dlc else None
+        send_json(self, HTTPStatus.OK, {"dlc": dlc_obj, "pack": meta})
+
     def _handle_visualize(self, payload: dict) -> None:
         prompt = payload.get("prompt", "")
         mode = payload.get("preferred_mode", "auto")
+        language = normalize_language(payload.get("language"))
         if mode not in {"auto", "2d", "3d"}:
             mode = "auto"
         if not isinstance(prompt, str) or not prompt.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "A non-empty prompt is required."})
             return
         try:
-            result = plan_visualization(prompt.strip()[:4000], mode)
+            result = plan_visualization(prompt.strip()[:4000], mode, language)
         except RuntimeError as error:
             send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
             return
@@ -2175,13 +2675,17 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
         code = payload.get("code", "")
         error = payload.get("error", "")
         where = payload.get("where", "")
+        language = normalize_language(payload.get("language"))
         if not isinstance(prompt, str) or not isinstance(code, str) or not code.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "prompt and code are required."})
             return
         try:
             result = repair_visualization(
-                prompt.strip()[:4000], code[:20000], str(error)[:2000], str(where)[:300]
+                _prompt_for_language(prompt.strip()[:4000], language),
+                code[:20000], str(error)[:2000], str(where)[:300]
             )
+            result["prompt"] = prompt.strip()[:4000]
+            result["language"] = language
         except RuntimeError as err:
             send_json(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(err)})
             return
@@ -2193,6 +2697,8 @@ class VisualLMHandler(SimpleHTTPRequestHandler):
         # thinking the second access could still be None.
         raw_viz = payload.get("visualization")
         viz: dict = raw_viz if isinstance(raw_viz, dict) else {}
+        viz = dict(viz)
+        viz["_response_language"] = normalize_language(payload.get("language"))
         history = normalize_history(payload.get("history"))
         if not isinstance(question, str) or not question.strip():
             send_json(self, HTTPStatus.BAD_REQUEST, {"error": "A non-empty question is required."})

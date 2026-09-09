@@ -1,0 +1,41 @@
+{
+  "format": "visuallm-dlc/1",
+  "id": "chem-lab",
+  "name": "Chemistry Lab",
+  "description": "AP Chemistry — 85 demos on bonding, thermodynamics, kinetics, and equilibrium, plus an ideal-gas lab. (Molecules & balancing work from the prompt box.)",
+  "category": "chem",
+  "icon": "🧪",
+  "source": "official",
+  "version": "1.0",
+  "areas": [
+    "AP Chemistry"
+  ],
+  "experiments": [
+    {
+      "id": "exp-ideal-gas-isotherm",
+      "title": "Ideal Gas Isotherm",
+      "blurb": "PV = nRT. Change moles and temperature and watch the pressure-volume curve breathe.",
+      "area": "AP Chemistry",
+      "topic": "Experiments",
+      "params": [
+        {
+          "name": "n",
+          "label": "moles  n",
+          "min": 0.2,
+          "max": 2,
+          "step": 0.1,
+          "value": 1
+        },
+        {
+          "name": "T",
+          "label": "temperature  T (K)",
+          "min": 100,
+          "max": 600,
+          "step": 10,
+          "value": 300
+        }
+      ],
+      "code": "H.background();\nconst v = H.plot2d({ xMin: 0.2, xMax: 10, yMin: 0, yMax: 12 });\nv.grid(); v.axes();\nconst n = P.n, T = P.T, R = 0.0821, scale = 0.5;\nconst Pv = (V) => (V <= 0.05 ? 0 : (n * R * T * scale) / V);\nv.fn(Pv, { color: H.colors.accent, width: 3 });\nconst Vs = 2 + 3.5 * (0.5 + 0.5 * Math.sin(t * 0.5));\nv.dot(Vs, Pv(Vs), { r: 7, fill: H.colors.warn });\nH.text('Ideal gas isotherm:  P = nRT / V', 16, 24, { color: H.colors.ink, size: 18, weight: 700 });\nH.text('n=' + n.toFixed(2) + ' mol   T=' + T.toFixed(0) + ' K     (x = V,  y = P)', 16, 48, { color: H.colors.sub, size: 13 });"
+    }
+  ]
+}

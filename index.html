@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a0a" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
@@ -17,22 +18,47 @@
       response headers for that), so the worker can still use `new Function`
       to compile generated code.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; worker-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self';" />
-    <title>VisualLM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="./styles.css?v=10" />
+    <!--
+      `file:` is added to each fetch directive so the page also renders when
+      opened directly from disk (a file:// preview / "preview sim") — without it
+      the CSP blocks the same-folder stylesheet/scripts and the page shows with
+      no styling. `file:` is inert when served over http(s) (a remote page can't
+      load file:// resources anyway), so this does not weaken the served app.
+      NB: full functionality (the canvas Web Worker + the data fetches) still
+      requires http — browsers block workers and fetch under file://.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; script-src 'self' 'unsafe-inline' file:; style-src 'self' file:; font-src 'self' file: data:; connect-src 'self' file:; worker-src 'self' file:; img-src 'self' file: data:; frame-ancestors 'none'; base-uri 'self';" />
+    <title>VisualLM · Animated STEM lessons</title>
+    <link rel="stylesheet" href="./styles.css?v=23" />
     <script>
-      // Apply the saved theme BEFORE the page paints, so there's no flash of
-      // the wrong palette. Default to dark. The toggle in the topbar flips it.
+      // Apply the saved theme AND the saved AI-tutor height BEFORE the page
+      // paints, so there's no flash of the wrong palette or a jumping layout.
       (function () {
         try {
           var t = localStorage.getItem("visuallm-theme") || "dark";
           document.documentElement.dataset.theme = t;
+        } catch (e) {
+          /* localStorage unavailable */
+        }
+        try {
+          var th = parseFloat(localStorage.getItem("visuallm-tutor-h"));
+          if (!isNaN(th)) {
+            var maxh = Math.max(150, window.innerHeight - 300);
+            th = Math.min(maxh, Math.max(150, th));
+            document.documentElement.style.setProperty("--tutor-h", th + "px");
+          }
+        } catch (e) {
+          /* localStorage unavailable */
+        }
+        try {
+          var cl = parseFloat(localStorage.getItem("visuallm-col-left"));
+          if (!isNaN(cl))
+            document.documentElement.style.setProperty(
+              "--col-left", Math.min(460, Math.max(200, cl)) + "px");
+          var cr = parseFloat(localStorage.getItem("visuallm-col-right"));
+          if (!isNaN(cr))
+            document.documentElement.style.setProperty(
+              "--col-right", Math.min(420, Math.max(190, cr)) + "px");
         } catch (e) {
           /* localStorage unavailable */
         }
@@ -43,9 +69,23 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">●</span>
-        <span class="brand-name">VisualLM</span>
+        <span class="brand-copy">
+          <span class="brand-name">VisualLM</span>
+          <span class="brand-subtitle" data-i18n="app_subtitle">Animated STEM studio</span>
+        </span>
       </div>
       <div class="topbar-status">
+        <label class="language-control">
+          <span class="sr-only" data-i18n="language">Language</span>
+          <select id="languageSelect" aria-label="Language" data-i18n-aria-label="language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+            <option value="es">Español</option>
+            <option value="hi">हिन्दी</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+          </select>
+        </label>
         <span id="ollamaStatusBadge" class="status-pill pending">Checking…</span>
         <span id="ollamaModelLabel" class="topbar-meta">Detecting…</span>
         <button
@@ -63,13 +103,13 @@
       <aside class="panel left-panel">
         <nav class="tab-bar" role="tablist" aria-label="Control panel sections">
           <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="explanation">
-            Explanation
+            <span data-i18n="explanation">Explanation</span>
           </button>
           <button type="button" class="tab" role="tab" aria-selected="false" data-tab="examples">
-            Examples &amp; Playback
+            <span data-i18n="examples_playback">Examples &amp; Playback</span>
           </button>
           <button type="button" class="tab" role="tab" aria-selected="false" data-tab="resources">
-            Resources
+            <span data-i18n="resources">Resources</span>
             <span class="tab-count" id="resourceCount" hidden>0</span>
           </button>
         </nav>
@@ -78,33 +118,33 @@
         <section class="tab-panel active" data-panel="explanation" role="tabpanel">
           <div class="meta-grid">
             <div class="meta-cell">
-              <span class="meta-label">Concept</span>
+              <span class="meta-label" data-i18n="concept">Concept</span>
               <strong id="detectedTopic">Waiting…</strong>
             </div>
             <div class="meta-cell">
-              <span class="meta-label">Scene</span>
+              <span class="meta-label" data-i18n="scene">Scene</span>
               <strong id="detectedDimension">Auto</strong>
             </div>
             <div class="meta-cell meta-cell-wide">
-              <span class="meta-label">Equation / rule</span>
+              <span class="meta-label" data-i18n="equation_rule">Equation / rule</span>
               <code id="detectedEquation">—</code>
             </div>
           </div>
 
           <div class="panel-section">
-            <h3 class="section-title">What you're seeing</h3>
-            <p id="sceneSummary" class="section-body">
+            <h3 class="section-title" data-i18n="what_seeing">What you're seeing</h3>
+            <p id="sceneSummary" class="section-body" data-initial-i18n="server_intro">
               Type any STEM idea on the right, then press Visualize. The AI will
               write a custom animation and explain it here.
             </p>
           </div>
 
           <div class="panel-section">
-            <h3 class="section-title">Key points</h3>
+            <h3 class="section-title" data-i18n="learning_checkpoints">Learning checkpoints</h3>
             <ul id="explanationList" class="bullet-list">
-              <li>Generation: Claude writes the animation code from scratch.</li>
-              <li>Sandbox: the code runs in a locked-down Web Worker.</li>
-              <li>Repair loop: errors are caught and fixed automatically.</li>
+              <li data-i18n="observe_default">Observe the motion first and identify what changes.</li>
+              <li data-i18n="adjust_default">Adjust a value and predict the result before replaying.</li>
+              <li data-i18n="explain_default">Explain the pattern in your own words to check understanding.</li>
             </ul>
           </div>
         </section>
@@ -112,12 +152,12 @@
         <!-- Tab 2: Examples + Playback -->
         <section class="tab-panel" data-panel="examples" role="tabpanel" hidden>
           <div class="panel-section">
-            <h3 class="section-title">Playback</h3>
+            <h3 class="section-title" data-i18n="playback">Playback</h3>
             <div class="playback-row">
-              <button id="playPauseButton" type="button" class="ghost-button">Pause</button>
+              <button id="playPauseButton" type="button" class="ghost-button" data-i18n="pause">Pause</button>
               <div class="slider-block">
                 <div class="slider-head">
-                  <label for="speedSlider">Speed</label>
+                  <label for="speedSlider" data-i18n="speed">Speed</label>
                   <span id="speedValue">1.0×</span>
                 </div>
                 <input id="speedSlider" type="range" min="0.4" max="2.5" step="0.1" value="1" />
@@ -126,7 +166,7 @@
           </div>
 
           <div class="panel-section">
-            <h3 class="section-title">Try an example</h3>
+            <h3 class="section-title" data-i18n="try_example">Try an example</h3>
             <div class="chip-grid">
               <button type="button" class="chip" data-prompt="y = sin(x) + 0.35 * sin(3x)">
                 y = sin(x) + 0.35·sin(3x)
@@ -158,106 +198,183 @@
               <button type="button" class="chip" data-prompt="Visualize an RC circuit charging a capacitor over time.">
                 RC circuit
               </button>
+              <button type="button" class="chip" data-prompt="CH4">
+                Methane (3D molecule)
+              </button>
+              <button type="button" class="chip" data-prompt="benzene">
+                Benzene structure
+              </button>
+              <button type="button" class="chip" data-prompt="C3H8 + O2 -> CO2 + H2O">
+                Balance: propane combustion
+              </button>
             </div>
           </div>
         </section>
 
         <!-- Tab 3: Resources -->
         <section class="tab-panel" data-panel="resources" role="tabpanel" hidden>
-          <div class="panel-section">
-            <h3 class="section-title">Reference material</h3>
-            <p class="section-body">
-              Upload notes, problem sets, lecture excerpts, or code. The AI uses
-              them as context when generating the animation and answering your
-              questions, so explanations stay grounded in your material.
-            </p>
+          <!-- Study Packs catalog -->
+          <div class="panel-section" id="dlcCatalogSection">
+            <h3 class="section-title" data-i18n="study_packs">Study Packs</h3>
+            <div id="dlcCatalog" class="dlc-catalog"></div>
           </div>
 
-          <label class="drop-zone" id="dropZone">
-            <input id="resourceFileInput" type="file" multiple
-              accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
-            <strong>Drop files here or click to upload</strong>
-            <span>Text-based files only (.txt, .md, .csv, .json, .py, .js, …) — up to 60K characters each.</span>
-          </label>
+          <!-- Pack detail (shown when a pack is opened) -->
+          <div class="panel-section" id="dlcDetailSection" hidden>
+            <button type="button" id="dlcBack" class="dlc-back" data-i18n="all_packs">← All packs</button>
+            <div id="dlcDetail" class="dlc-detail"></div>
+          </div>
 
-          <div class="resource-list" id="resourceList" hidden></div>
-          <p class="resource-empty" id="resourceEmpty">
-            No resources yet. Anything you upload here will be visible to the
-            tutor and the animation generator.
-          </p>
+          <!-- Import a pack -->
+          <div class="panel-section">
+            <h3 class="section-title" data-i18n="import_pack">Import a pack</h3>
+            <label class="drop-zone dlc-drop" id="dlcDropZone">
+              <input id="dlcFileInput" type="file" accept=".zip,.json,application/zip,application/json" />
+              <strong>Drop a <code>.zip</code> pack</strong>
+              <span>…or a <code>.dlc.json</code>. Adds its demos &amp; experiments — offline, sandboxed.</span>
+            </label>
+            <p id="dlcImportMsg" class="dlc-msg" hidden></p>
+          </div>
+
+          <!-- AI Analysis → custom pack -->
+          <div class="panel-section">
+            <h3 class="section-title">AI Analysis → custom pack</h3>
+            <div id="dlcAnalyze">
+              <p class="section-body">
+                Upload a slide, notes, or a link and the AI builds a tailored demo
+                pack you can download and share.
+                <strong>Runs in the desktop app</strong> — make one there, then
+                Import the <code>.dlc.json</code> here.
+              </p>
+            </div>
+
+            <!-- Desktop context uploader (notes/slides the AI reads as context).
+                 Hidden until app.js confirms a real backend is present. Kept in
+                 the DOM so the resource bindings stay valid in both editions. -->
+            <div id="resourceUploadBlock" hidden>
+              <label class="drop-zone" id="dropZone">
+                <input id="resourceFileInput" type="file" multiple
+                  accept=".txt,.md,.markdown,.csv,.json,.tsv,.py,.js,.ts,.tex,.html,.xml,.yaml,.yml,.ini,.toml,.log" />
+                <strong>Drop context files (optional)</strong>
+                <span>Notes, slides, or code the AI reads while generating &amp; tutoring.</span>
+              </label>
+              <div class="resource-list" id="resourceList" hidden></div>
+              <p class="resource-empty" id="resourceEmpty" hidden>No resources yet.</p>
+            </div>
+          </div>
         </section>
       </aside>
+
+      <!-- Width handle: drag to resize the Explanation / canvas columns. -->
+      <div
+        id="colResizerLeft"
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the left panel width (or use arrow keys)"
+        tabindex="0"
+      ></div>
 
       <!-- CENTER: visualization stage -->
       <section class="panel stage-panel">
         <div class="canvas-frame">
           <div class="canvas-overlay">
             <span id="sceneTag">AI Planner</span>
-            <span id="sceneConfidence" role="status" aria-live="polite" aria-atomic="true">Idle — type a prompt to begin.</span>
+            <span id="sceneConfidence" role="status" aria-live="polite" aria-atomic="true" data-initial-i18n="idle_prompt">Idle — type a prompt to begin.</span>
           </div>
-          <span id="orbitHint" class="orbit-hint" hidden>drag to orbit · scroll to zoom · double-click to reset</span>
+          <span id="orbitHint" class="orbit-hint" hidden data-i18n="orbit_hint">drag to orbit · scroll to zoom · double-click to reset</span>
         </div>
       </section>
+
+      <!-- Width handle: drag to resize the canvas / Prompt columns. -->
+      <div
+        id="colResizerRight"
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the right panel width (or use arrow keys)"
+        tabindex="0"
+      ></div>
 
       <!-- RIGHT: prompt -->
       <aside class="panel right-panel">
         <div class="panel-header">
-          <h2>Prompt</h2>
-          <p>Describe the idea or give an equation.</p>
+          <span class="panel-eyebrow" data-i18n="start_lesson">Start a lesson</span>
+          <h2 data-i18n="question_heading">What do you want to understand?</h2>
+          <p data-i18n="prompt_help">Enter a formula, reaction, topic, or worked problem.</p>
         </div>
 
-        <label class="sr-only" for="promptInput">Prompt</label>
-        <textarea id="promptInput" spellcheck="false" rows="6">
+        <ol class="learning-path" aria-label="Learning flow">
+          <li><span><strong data-i18n="describe">Describe</strong> <span data-i18n="describe_help">the idea you want to explore.</span></span></li>
+          <li><span><strong data-i18n="observe">Observe</strong> <span data-i18n="observe_help">the animation and change its values.</span></span></li>
+          <li><span><strong data-i18n="question">Question</strong> <span data-i18n="question_help">the result using the learning coach.</span></span></li>
+        </ol>
+
+        <label class="sr-only" for="promptInput" data-i18n="prompt">Prompt</label>
+        <textarea id="promptInput" spellcheck="true" maxlength="4000" rows="6">
 Explain heat diffusion across a metal plate and show how the temperature changes over space.</textarea>
 
         <div class="mode-picker">
-          <span class="mode-label">Prefer</span>
+          <span class="mode-label" data-i18n="prefer">Prefer</span>
           <div class="segmented-control" role="radiogroup" aria-label="Scene mode">
-            <button class="mode-button active" type="button" role="radio" aria-checked="true" data-mode="auto">Auto</button>
+            <button class="mode-button active" type="button" role="radio" aria-checked="true" data-mode="auto" data-i18n="auto">Auto</button>
             <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="2d">2D</button>
             <button class="mode-button" type="button" role="radio" aria-checked="false" data-mode="3d">3D</button>
           </div>
         </div>
 
         <div class="composer-actions">
-          <button id="visualizeButton" type="button" class="action-button primary">Visualize</button>
-          <button id="randomButton" type="button" class="action-button secondary">Surprise me</button>
+          <button id="visualizeButton" type="button" class="action-button primary" data-i18n="visualize">Visualize</button>
+          <button id="randomButton" type="button" class="action-button secondary" data-i18n="surprise">Surprise me</button>
         </div>
 
         <div class="prompt-foot">
-          <p class="hint">Cmd/Ctrl + Enter to run. The sandbox renders in the center.</p>
+          <p class="hint" data-i18n="tip">Tip: change one variable at a time. Press Cmd/Ctrl + Enter to run.</p>
         </div>
       </aside>
     </main>
 
+    <!-- Drag handle: stretch / shrink the AI Tutor; the top self-adapts. -->
+    <div
+      id="appResizer"
+      class="app-resizer"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Drag to resize the AI Tutor panel (or use arrow keys)"
+      tabindex="0"
+    ></div>
+
     <!-- BOTTOM: tutor -->
     <section class="panel tutor-panel">
       <div class="tutor-header">
-        <h2>AI Tutor</h2>
-        <p>Ask anything about the current scene. Answers stay grounded in the animation and your uploaded resources.</p>
+        <span class="panel-eyebrow" data-i18n="reflect_practise">Reflect and practise</span>
+        <h2 data-i18n="learning_coach">Learning coach</h2>
+        <p data-i18n="server_coach_desc">Ask for a hint, a comparison, or a next-step question grounded in the current scene.</p>
       </div>
 
       <div class="tutor-grid">
         <div class="chat-column">
           <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
           <form id="chatForm" class="chat-composer">
-            <label class="sr-only" for="chatInput">Ask the tutor</label>
-            <textarea id="chatInput" spellcheck="true"
+            <label class="sr-only" for="chatInput" data-i18n="ask_tutor">Ask the tutor</label>
+            <textarea id="chatInput" spellcheck="true" data-i18n-placeholder="server_placeholder"
               placeholder="Ask why the curve bends, what each force means, or how to solve a similar problem."></textarea>
             <div class="chat-actions">
-              <p id="chatHint" class="chat-hint">The tutor uses the current visualization as context.</p>
-              <button id="sendChatButton" type="submit" class="action-button primary">Ask</button>
+              <p id="chatHint" class="chat-hint" data-i18n="server_chat_hint">The coach uses the current visualization as context.</p>
+              <button id="sendChatButton" type="submit" class="action-button primary" data-i18n="ask">Ask</button>
             </div>
           </form>
         </div>
 
         <aside class="chat-sidebar">
-          <h3 class="section-title">Quick questions</h3>
+          <h3 class="section-title" data-i18n="quick_questions">Quick questions</h3>
           <div id="chatSuggestions" class="suggestion-list"></div>
         </aside>
       </div>
     </section>
 
-    <script src="./app.js?v=17"></script>
+    <script src="./web/i18n.js?v=1"></script>
+    <script src="./zip.js?v=1"></script>
+    <script src="./app.js?v=34"></script>
   </body>
 </html>

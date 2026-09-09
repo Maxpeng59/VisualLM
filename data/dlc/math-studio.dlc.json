@@ -1,0 +1,62 @@
+{
+  "format": "visuallm-dlc/1",
+  "id": "math-studio",
+  "name": "Math Studio",
+  "description": "Algebra 1 & 2, Geometry, Precalculus, and Calculus — 299 interactive demos, plus a function-transformer lab.",
+  "category": "math",
+  "icon": "📐",
+  "source": "official",
+  "version": "1.0",
+  "areas": [
+    "Algebra 1",
+    "Algebra 2",
+    "Geometry",
+    "Geometry & Trig",
+    "Precalculus",
+    "Calculus"
+  ],
+  "experiments": [
+    {
+      "id": "exp-function-transformer",
+      "title": "Function Transformer",
+      "blurb": "Slide a, b, c, d and watch how each one stretches, squeezes, shifts, and lifts a sine wave.",
+      "area": "Precalculus",
+      "topic": "Experiments",
+      "params": [
+        {
+          "name": "a",
+          "label": "amplitude  a",
+          "min": -3,
+          "max": 3,
+          "step": 0.1,
+          "value": 2
+        },
+        {
+          "name": "b",
+          "label": "frequency  b",
+          "min": 0.2,
+          "max": 4,
+          "step": 0.1,
+          "value": 1
+        },
+        {
+          "name": "c",
+          "label": "phase  c",
+          "min": -3.14,
+          "max": 3.14,
+          "step": 0.1,
+          "value": 0
+        },
+        {
+          "name": "d",
+          "label": "midline  d",
+          "min": -4,
+          "max": 4,
+          "step": 0.1,
+          "value": 0
+        }
+      ],
+      "code": "H.background();\nconst v = H.plot2d({ xMin: -6.5, xMax: 6.5, yMin: -6, yMax: 6 });\nv.grid(); v.axes();\nconst a = P.a, b = (Math.abs(P.b) < 0.05 ? 0.05 : P.b), c = P.c, d = P.d;\nconst f = (x) => a * Math.sin(b * x + c) + d;\nv.line(-6.5, d, 6.5, d, { color: H.colors.violet, width: 1.5, dash: [4, 4] });\nv.fn(f, { color: H.colors.accent, width: 3 });\nconst xs = 6 * Math.sin(t * 0.6);\nv.dot(xs, f(xs), { r: 6, fill: H.colors.accent2 });\nH.text('Transform:  y = a\\u00b7sin(b\\u00b7x + c) + d', 16, 24, { color: H.colors.ink, size: 18, weight: 700 });\nH.text('a=' + a.toFixed(1) + '   b=' + b.toFixed(1) + '   c=' + c.toFixed(1) + '   d=' + d.toFixed(1), 16, 48, { color: H.colors.sub, size: 13 });"
+    }
+  ]
+}

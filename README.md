@@ -5,12 +5,37 @@ or 3D explanation**. Instead of picking from a handful of fixed demos, the AI
 *writes the animation itself* — generating JavaScript that runs in a locked-down
 sandbox in your browser — so it can visualize essentially any topic.
 
+## Two editions
+
+VisualLM ships in two flavors of the same project:
+
+| | **Browser edition** (`web/`) | **Desktop / server edition** (repo root) |
+|---|---|---|
+| Runs | 100% in the browser — **no server, no install, no API key** | Local Python server (or packaged desktop app) |
+| Host | **GitHub Pages** (static) — instant, free, shareable link | Your machine, or any server host (Render, etc.) |
+| Chemistry: 3D molecules + equation balancing | ✅ | ✅ |
+| 333 interactive curriculum demos + 50 curated scenes | ✅ | ✅ |
+| Interface languages: English, Chinese, Spanish, Hindi, French, German | ✅ | ✅ |
+| Free-form AI generation (type *any* idea) | ❌ (needs a model + key) | ✅ (Claude ▸ ChatGPT ▸ Gemini) |
+| AI tutor chat | ❌ | ✅ |
+
+The browser edition is a faithful client-side port: the chemistry engine and the
+demo/scene matcher are reimplemented in JavaScript (`web/js/`) with **verified
+parity** against the Python — same molecules, same exact-integer balancing, same
+scene routing. It's the fastest way to share VisualLM (just a link); the desktop
+edition adds the open-ended AI generation that needs server-side keys.
+
+- **Browser edition (live):** https://maxpeng59.github.io/VisualLM/
+- **Desktop app:** `python3 launch.py` (browser app-window) or `python3 desktop.py`
+  (native window), or build a standalone app with `./build_app.sh`.
+- **Server deploy (full app):** see [Deploy](#deploy) below (Render blueprint).
+
 ## How it works
 
 ```
 prompt ──▶ /api/visualize ──▶ AI writes scene code ──▶ sandbox renders it
                                       │                        │
-                     (Claude ▸ ChatGPT ▸ Gemini ▸ Ollama)      │
+                       (Claude ▸ ChatGPT ▸ Gemini)            │
                                                         error? └─▶ /api/repair ──┐
                                                                                   │
                                                        fixed code ◀───────────────┘
@@ -32,6 +57,16 @@ prompt ──▶ /api/visualize ──▶ AI writes scene code ──▶ sandbox
 
 **3D scenes are interactive:** drag the canvas to orbit, scroll to zoom,
 double-click to reset the view.
+
+## Languages
+
+Use the language selector in the top bar to switch the learning interface
+between English, Simplified Chinese, Spanish, Hindi, French, and German. The
+choice is saved on the device and restored at the next launch. In the
+desktop/server edition, the selected language is also sent to the configured AI
+provider so custom scene titles, explanations, canvas labels, and tutor replies
+are generated in that language. Equations, variable names, and units remain
+universal. Built-in curated lesson subject matter remains available offline.
 
 ## Real 3D, not point clouds
 
@@ -97,25 +132,50 @@ Generation tries providers in this order — the first one with a key wins:
 | **Claude** | `ANTHROPIC_API_KEY` (+ `pip install anthropic`) | Primary generator — best quality |
 | **ChatGPT** | `OPENAI_API_KEY` | Cloud fallback generator |
 | **Gemini** | `GEMINI_API_KEY` | Cloud fallback generator |
-| **Ollama** | run `ollama serve` locally | Offline fallback + default tutor |
 
-All cloud providers are called over plain REST — no extra SDKs required.
+All cloud providers are called over plain REST — no extra SDKs required. **The AI
+relies only on code — there is no local model app.** With **no key at all**,
+VisualLM still runs entirely on its built-in pure-code library: 3D chemistry,
+balanced reactions, the step-by-step solver, and every interactive demo work
+offline. A key only adds free-form "type any idea" generation.
 
-## Run locally
+## Run it (as an app)
+
+The easy way — after a one-time setup, **no terminal needed**:
+
+1. **Install dependencies (once).** Run **`./install.sh`** (macOS/Linux) or
+   **`install.bat`** (Windows). It creates a `.venv` and downloads everything —
+   the Claude client and the native-window backend (pywebview). Then, optionally,
+   add a key to `.env`: `ANTHROPIC_API_KEY=sk-ant-...`. **No key? Skip it** —
+   chemistry, reactions, the solver, and the demos all run offline; a key only
+   adds free-form AI generation.
+2. **Launch it.**
+   - **macOS:** double-click **`VisualLM.command`** in Finder (first time: right-click → Open to clear the macOS warning).
+   - **Any OS:** `python3 launch.py`
+
+   The launcher loads `.env`, starts the server on a free port, waits until it's
+   healthy, and opens VisualLM in its own app-style window. Keep that window open;
+   Ctrl+C (or closing it) stops everything.
+
+**Prefer a true native window** (no browser chrome at all)? `pip install pywebview`
+then `python3 desktop.py`.
+
+**Want a real, self-contained app** (bundles Python — no terminal, no repo needed
+to run)? `./build_app.sh` produces **`dist/VisualLM.app`** via PyInstaller; move it
+to /Applications and double-click. It runs the server in-process (`app_main.py`)
+and serves bundled assets. For Claude inside the bundle, `pip install anthropic`
+before building; for a native window, `pip install pywebview` before building.
+The packaged app reads a `.env` placed next to `VisualLM.app` or in `~/.visuallm/`.
+
+### Plain manual start
+
+Equivalent to what the launcher does, if you'd rather drive it yourself:
 
 ```bash
-# 1. (Recommended) enable at least one cloud generator
-pip install -r requirements.txt          # only needed for Claude
-export ANTHROPIC_API_KEY=sk-ant-...      # and/or OPENAI_API_KEY / GEMINI_API_KEY
-
-# 2. (Optional) local fallback + tutor: run Ollama with a model
-ollama pull qwen2.5:7b
-
-# 3. Start the app
-python3 main.py
+./install.sh                              # one-time: creates .venv + installs deps
+export ANTHROPIC_API_KEY=sk-ant-...       # optional — and/or OPENAI_API_KEY / GEMINI_API_KEY
+python3 main.py                           # then open http://127.0.0.1:4173
 ```
-
-Then open <http://127.0.0.1:4173>.
 
 ## Deploy to the web
 
@@ -133,6 +193,23 @@ binds `0.0.0.0` automatically when it's set.
    secret phrase. Visitors are asked for it once before they can generate, so
    strangers can't burn your API credits. Per-IP rate limiting is on by
    default (`VISUALLM_RATE_LIMIT`, 10/min via render.yaml).
+
+It works with **no API key** — all curriculum demos and STEM library scenes are
+served from the bundled libraries (no model calls), so the site is fully useful
+out of the box. A key only enables free-form "type any idea" generation.
+
+### Custom domain (e.g. www.VisualLM.com)
+
+The app is origin-agnostic (all requests are relative paths), so a custom domain
+needs only DNS — no code changes:
+
+1. Own the domain (buy `VisualLM.com` from any registrar if you don't).
+2. In your Render service → **Settings → Custom Domains** → add `www.visuallm.com`
+   (and `visuallm.com`). Render shows the exact DNS records to create.
+3. At your registrar's DNS panel, add what Render gives you — typically:
+   - `www`  → **CNAME** → `your-app.onrender.com`
+   - root `@` → Render's **A record** (or an ALIAS/ANAME → `your-app.onrender.com`)
+4. Wait for DNS to propagate (minutes–hours); Render auto-provisions free HTTPS.
 
 ### Any other Docker host (Fly.io, Railway, Cloud Run, a VPS…)
 
@@ -153,9 +230,12 @@ HTTP round-trips against every endpoint (with stubbed generators).
 
 ## Files
 
-- `main.py` — web server, the four AI bridges (Claude/OpenAI/Gemini/Ollama),
-  the validate→auto-fix→repair pipeline, library retrieval + cache, rate
-  limiting, and the system prompt that defines the rendering contract.
+- `main.py` — web server, the three cloud AI bridges (Claude/OpenAI/Gemini —
+  no local model app), the validate→auto-fix→repair pipeline, library retrieval
+  + cache, rate limiting, and the system prompt that defines the rendering
+  contract.
+- `install.sh` / `install.bat` — one-shot dependency installers (create a
+  `.venv`, download the Claude client + the pywebview native-window backend).
 - `sandbox-worker.js` — the sandboxed Web Worker that runs generated code on
   an OffscreenCanvas, the `H` helper library, and the software 3D pipeline.
 - `validate_scene.js` — headless server-side scene validator (hardened Node
@@ -165,6 +245,12 @@ HTTP round-trips against every endpoint (with stubbed generators).
 - `app.js` — orchestration: sandbox runner, generate→run→repair loop, orbit
   controls, playback, tutor chat, resources, status.
 - `index.html` / `styles.css` — app structure and visual design.
+- `launch.py` / `VisualLM.command` / `desktop.py` — run VisualLM as an app:
+  the one-click launcher (loads `.env`, starts the server on a free port, opens
+  an app-style window), the macOS double-click wrapper, and the optional
+  native-window version (pywebview). `.env.example` is the key template.
+- `stem-viz-plugin/` — the scene-generation capability packaged as a portable
+  Claude skill + plugin (drop into any AI); see its own README.
 - `Dockerfile` / `render.yaml` — production deployment (Docker image bundles
   Node for the validator).
 - `tests/` — stdlib-only test suite (covers the validator, auto-fixer,
@@ -188,7 +274,6 @@ When `VISUALLM_ACCESS_CODE` is set, all POST/DELETE endpoints require the
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-8`)
 - `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`) / `OPENAI_BASE_URL`
 - `GEMINI_API_KEY` / `GEMINI_MODEL` (default `gemini-2.0-flash`) / `GEMINI_BASE_URL`
-- `OLLAMA_URL` (default `http://127.0.0.1:11434`) / `OLLAMA_MODEL`
 - `VISUALLM_ACCESS_CODE` — require a shared code for generation (recommended
   on public deployments).
 - `VISUALLM_RATE_LIMIT` — requests/min per IP (default 20; 0 disables).

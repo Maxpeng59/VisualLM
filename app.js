@@ -6,6 +6,9 @@
   /* ============================================================== */
 
   const $ = (id) => document.getElementById(id);
+  const i18n = window.VisualLMI18n || null;
+  const tr = (key, vars) => (i18n ? i18n.t(key, vars) : key);
+  const currentLanguage = () => (i18n ? i18n.current() : "en");
 
   function escapeHtml(text) {
     return String(text)
@@ -18,7 +21,7 @@
   /* Tutor text rendering                                           */
   /* ============================================================== */
   //
-  // The tutor (Ollama or Claude) sometimes ignores the "plain text" rule and
+  // The tutor (Claude/OpenAI/Gemini) sometimes ignores the "plain text" rule and
   // emits Markdown + LaTeX. Rather than rely on prompt discipline, we clean
   // it up here:
   //   1. HTML-escape first, so any literal <, >, & from the model stays text.
@@ -54,26 +57,55 @@
     s = s.replace(/(?<!\$)\$([^\s$][^$\n]*?[^\s$])\$(?!\$)/g, "$1");
     s = s.replace(/(?<!\$)\$([^\s$])\$(?!\$)/g, "$1");
 
-    // \frac{a}{b} -> a/b (parenthesize compound numerator/denominator).
-    s = s.replace(/\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}/g, (_, a, b) => {
+    // Degree: \circ and ^\circ -> ° (do this BEFORE the greek fallback, which
+    // would otherwise turn \circ into the literal word "circ", e.g. 58^circ).
+    s = s.replace(/\^?\s*\\circ\b/g, "°");
+    s = s.replace(/\\degrees?\b/g, "°");
+
+    // LaTeX spacing macros (\, \; \: \! \quad \qquad and backslash-space) -> a
+    // single space. The greek fallback ignores these (\, isn't a letter run),
+    // so without this they survive as literal "\," junk.
+    s = s.replace(/\\(?:quad|qquad)\b/g, " ");
+    s = s.replace(/\\[,;:!> ]/g, " ");
+
+    // Formatting commands are meaningful to TeX, but this interface renders
+    // plain text. Remove several common wrappers (including nested ones) so a
+    // model response never leaks incompatible style markup into the UI.
+    for (let i = 0; i < 3; i += 1) {
+      s = s.replace(
+        /\\(?:mathrm|mathbf|mathit|mathsf|mathtt|operatorname|textbf|textit|emph|underline|overline|vec)\s*\{([^{}]*)\}/g,
+        "$1",
+      );
+    }
+
+    // \frac{a}{b} -> a/b. Tolerate doubled braces {{...}} that local models
+    // sometimes emit, and parenthesize a compound numerator/denominator.
+    s = s.replace(/\\frac\s*\{+([^{}]+)\}+\s*\{+([^{}]+)\}+/g, (_, a, b) => {
+      a = a.trim();
+      b = b.trim();
       const parenA = /[+\-]/.test(a) ? `(${a})` : a;
       const parenB = /[+\-]/.test(b) ? `(${b})` : b;
       return `${parenA}/${parenB}`;
     });
     // \sqrt{a} -> sqrt(a)
-    s = s.replace(/\\sqrt\s*\{([^{}]+)\}/g, "sqrt($1)");
+    s = s.replace(/\\sqrt\s*\{+([^{}]+)\}+/g, "sqrt($1)");
     // \text{a} -> a
     s = s.replace(/\\text\s*\{([^{}]*)\}/g, "$1");
-    // Subscripts / superscripts: x_{n} -> x_n, x^{2} -> x^2
-    s = s.replace(/_\{([^{}]+)\}/g, "_$1");
-    s = s.replace(/\^\{([^{}]+)\}/g, "^$1");
+    // Subscripts / superscripts: x_{n} -> x_n, x^{2} -> x^2 (doubled braces too)
+    s = s.replace(/_\{+([^{}]+)\}+/g, "_$1");
+    s = s.replace(/\^\{+([^{}]+)\}+/g, "^$1");
 
+    // LaTeX sizing markers (\left( \right) \big …) — strip the command but keep
+    // the bracket. Must run BEFORE the generic \word converter below, which would
+    // otherwise turn "\left" into the English word "left" and then we'd wrongly
+    // delete real "left"/"right" words from prose ("Reactants (left) …").
+    s = s.replace(/\\(left|right|bigg?|Bigg?)\b/g, "");
     // Greek + common symbols / function names.
     s = s.replace(/\\([A-Za-z]+)/g, (_, name) =>
       Object.prototype.hasOwnProperty.call(GREEK, name) ? GREEK[name] : name
     );
-    // Stray "left"/"right" sizing markers — leave the inner brackets.
-    s = s.replace(/\b(left|right)\b/g, "");
+    // Any lone backslash left before whitespace/punctuation is LaTeX residue.
+    s = s.replace(/\\(?=[\s.,;:)\]}])/g, "");
     // Tidy spaces.
     return s.replace(/[ \t]+/g, " ").replace(/ ?\n ?/g, "\n");
   }
@@ -87,7 +119,9 @@
     // 3. Markdown: code, bold, italics, headers.
     s = s.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
     s = s.replace(/\*\*([^*\n][^*]*?)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/(?<![*\w])\*([^*\n]+?)\*(?!\w)/g, "<em>$1</em>");
+    // Italics: require non-space just inside the asterisks (CommonMark) so a
+    // multiplication like "gamma * m * c^2" is NOT treated as emphasis.
+    s = s.replace(/(?<![*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\w)/g, "<em>$1</em>");
     s = s.replace(/^#{1,6}\s+(.+)$/gm, "<strong>$1</strong>");
 
     // 4. Lists, line by line. Group consecutive same-type items, even when
@@ -229,6 +263,11 @@
   /* AI-generated animation code in isolation.                      */
   /* ============================================================== */
 
+  // The app theme ("light"|"dark") lives on <html data-theme>; the canvas worker
+  // needs it too so the animation follows the toggle. Default to dark.
+  const currentTheme = () =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark";
+
   class SandboxRunner {
     constructor(frame) {
       this.frame = frame;
@@ -240,6 +279,9 @@
       this.paused = false;
       this.onCrash = null; // called for runtime errors after a scene is live
       this._resizeRaf = 0;
+      this._lastDims = null;
+      this._orbitRaf = 0;
+      this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
       this._spawn();
       // Debounce via rAF: a window-drag fires resize ~60×/s, and each
       // _resize() sets canvas.width which CLEARS the bitmap. Without coalescing,
@@ -252,7 +294,26 @@
           this._resize();
         });
       });
+      if (typeof ResizeObserver !== "undefined") {
+        this._resizeObserver = new ResizeObserver(() => {
+          if (this._resizeRaf) return;
+          this._resizeRaf = requestAnimationFrame(() => {
+            this._resizeRaf = 0;
+            this._resize();
+          });
+        });
+        this._resizeObserver.observe(this.frame);
+      }
       this._wireOrbit();
+
+      // Stop rendering while the tab is hidden — no point animating a canvas
+      // nobody can see, and it frees the CPU/battery. Don't suspend mid-load
+      // (a pending run relies on the worker's heartbeat to settle).
+      document.addEventListener("visibilitychange", () => {
+        if (!this.worker) return;
+        if (document.hidden && this.pending && !this.pending.settled) return;
+        this.worker.postMessage({ type: "visible", value: !document.hidden });
+      });
     }
 
     /* Drag-to-orbit + scroll-to-zoom + double-click-to-reset for 3D scenes.
@@ -282,11 +343,7 @@
         const dy = e.clientY - lastY;
         lastX = e.clientX;
         lastY = e.clientY;
-        this.worker.postMessage({
-          type: "orbit",
-          dyaw: dx * 0.008,
-          dpitch: dy * 0.008,
-        });
+        this._queueOrbit({ dyaw: dx * 0.008, dpitch: dy * 0.008 });
       });
       const endDrag = () => {
         dragging = false;
@@ -299,15 +356,30 @@
         (e) => {
           if (!this.worker) return;
           e.preventDefault();
-          this.worker.postMessage({
-            type: "orbit",
-            dzoom: Math.exp(-e.deltaY * 0.0012),
-          });
+          this._queueOrbit({ dzoom: Math.exp(-e.deltaY * 0.0012) });
         },
         { passive: false }
       );
       frame.addEventListener("dblclick", () => {
-        if (this.worker) this.worker.postMessage({ type: "orbit-reset" });
+        if (!this.worker) return;
+        if (this._orbitRaf) cancelAnimationFrame(this._orbitRaf);
+        this._orbitRaf = 0;
+        this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
+        this.worker.postMessage({ type: "orbit-reset" });
+      });
+    }
+
+    _queueOrbit(delta) {
+      this._orbitDelta.dyaw += delta.dyaw || 0;
+      this._orbitDelta.dpitch += delta.dpitch || 0;
+      this._orbitDelta.dzoom *= delta.dzoom || 1;
+      if (this._orbitRaf) return;
+      this._orbitRaf = requestAnimationFrame(() => {
+        this._orbitRaf = 0;
+        if (!this.worker) return;
+        const payload = this._orbitDelta;
+        this._orbitDelta = { dyaw: 0, dpitch: 0, dzoom: 1 };
+        this.worker.postMessage({ type: "orbit", ...payload });
       });
     }
 
@@ -323,10 +395,18 @@
 
     _dims() {
       const rect = this.frame.getBoundingClientRect();
+      const width = Math.max(280, Math.round(rect.width));
+      const height = Math.max(240, Math.round(rect.height));
+      const pixelBudget = 2200000;
+      const requestedDpr = Math.min(1.5, window.devicePixelRatio || 1);
+      const budgetDpr = Math.sqrt(pixelBudget / Math.max(1, width * height));
       return {
-        width: Math.max(320, Math.round(rect.width)),
-        height: Math.max(240, Math.round(rect.height)),
-        dpr: Math.min(2, window.devicePixelRatio || 1),
+        width,
+        height,
+        // Cap at 1.5 rather than 2: on a Retina display dpr=2 means 4x the
+        // pixels to fill every frame, which dominates the cost of fill-heavy
+        // 3D scenes. 1.5 still looks crisp and roughly halves the fill work.
+        dpr: Math.max(0.75, Math.min(requestedDpr, budgetDpr)),
       };
     }
 
@@ -341,12 +421,13 @@
       }
       const canvas = this._newCanvas();
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new Worker("./sandbox-worker.js?v=16");
+      const worker = new Worker("./sandbox-worker.js?v=25");
       this.worker = worker;
       worker.onmessage = (e) => this._onMessage(e.data || {});
       const d = this._dims();
+      this._lastDims = d;
       worker.postMessage(
-        { type: "init", canvas: offscreen, width: d.width, height: d.height, dpr: d.dpr },
+        { type: "init", canvas: offscreen, width: d.width, height: d.height, dpr: d.dpr, theme: currentTheme() },
         [offscreen]
       );
     }
@@ -395,8 +476,9 @@
       else p.reject(err);
     }
 
-    /* Load code and resolve once it renders a frame; reject on error/hang. */
-    async run(code) {
+    /* Load code and resolve once it renders a frame; reject on error/hang.
+     * `params` seeds the demo `P` global (editable live via setParams). */
+    async run(code, params) {
       await this._whenReady();
       if (this.pending && !this.pending.settled) this._settle(false, new Error("superseded"));
 
@@ -408,7 +490,7 @@
           this._spawn(); // kill the frozen worker and start a fresh one
           this._settle(false, new Error("The animation hung (possible infinite loop)."));
         }, 3000);
-        this.worker.postMessage({ type: "run", code, resetTime: true });
+        this.worker.postMessage({ type: "run", code, params: params || {}, resetTime: true, theme: currentTheme() });
         if (this.paused) this.worker.postMessage({ type: "pause" });
         this.worker.postMessage({ type: "speed", value: this.speed });
       });
@@ -426,9 +508,20 @@
       this.speed = value;
       if (this.worker) this.worker.postMessage({ type: "speed", value });
     }
+    /* Live-update demo parameters without recompiling the scene. */
+    setParams(values) {
+      if (this.worker) this.worker.postMessage({ type: "params", values: values || {} });
+    }
+    /* Push a light/dark theme switch to the running scene (live, no recompile). */
+    setTheme(theme) {
+      if (this.worker) this.worker.postMessage({ type: "theme", theme });
+    }
     _resize() {
       if (!this.worker || !this.ready) return;
       const d = this._dims();
+      const prev = this._lastDims;
+      if (prev && prev.width === d.width && prev.height === d.height && Math.abs(prev.dpr - d.dpr) < 0.001) return;
+      this._lastDims = d;
       this.worker.postMessage({
         type: "resize",
         width: d.width,
@@ -497,6 +590,7 @@
         code: state.scene.code,
         error: err.message,
         where: err.where || "",
+        language: currentLanguage(),
       });
       await runSceneWithRepair(repaired, state.scene.prompt);
     } catch (repairErr) {
@@ -518,9 +612,12 @@
   function updatePanels(scene) {
     el.topic.textContent = scene.title;
     el.dimension.textContent = scene.dimension;
-    el.equation.textContent = scene.equation || "No single equation — concept scene";
+    el.equation.textContent = scene.equation || tr("no_equation");
     el.summary.textContent = scene.summary;
     el.tag.textContent = scene.tag;
+    // The help card is self-explanatory on the canvas — hide the overlay pills
+    // (tag + status) so they don't clutter it with redundant chrome.
+    if (el.frame) el.frame.classList.toggle("bare", !!scene.browser_help);
     // 3D scenes are orbitable — surface that, since nothing else hints at it.
     if (el.orbitHint) el.orbitHint.hidden = scene.dimension !== "3D";
 
@@ -549,7 +646,7 @@
     document.querySelectorAll(".chip").forEach((c) => {
       c.disabled = isBusy;
     });
-    el.visualize.textContent = isBusy ? label || "Generating…" : "Visualize";
+    el.visualize.textContent = isBusy ? label || tr("generating") : tr("visualize");
     // Tell screen readers the visualization region is loading / settled.
     if (el.frame) el.frame.setAttribute("aria-busy", isBusy ? "true" : "false");
     if (!isBusy && setBusyVisual._restoreFocus) {
@@ -588,8 +685,9 @@
     claude: "Claude",
     openai: "ChatGPT",
     gemini: "Gemini",
-    ollama: "local model",
     library: "curated library",
+    chemistry: "chemistry engine",
+    solver: "step-by-step solver",
     fallback: "fallback",
   };
   function engineName(engine) {
@@ -621,25 +719,26 @@
     const clean = (prompt || "").trim();
     if (!clean) return;
 
-    setBusyVisual(true, "Thinking…");
-    el.topic.textContent = "Generating…";
+    setBusyVisual(true, tr("thinking"));
+    el.topic.textContent = tr("generating");
     // Elapsed ticker — local generation can take 10-60s; a live counter makes
     // the wait legible instead of looking hung. (Curated/cached hits return so
     // fast the ticker never visibly advances.)
-    startElapsed("The AI is writing a custom animation for your prompt…");
+    startElapsed(tr("ai_writing"));
 
     // A new scene always starts playing. Without this, pausing one scene
     // left every FUTURE scene frozen on its first frame — which reads as
     // "the animation doesn't move" rather than "I paused it earlier".
     if (runner.paused) {
       runner.resume();
-      el.playPause.textContent = "Pause";
+      el.playPause.textContent = tr("pause");
     }
 
     try {
       const scene = await postJSON("/api/visualize", {
         prompt: clean,
         preferred_mode: state.mode,
+        language: currentLanguage(),
       });
       stopElapsed();
       await runSceneWithRepair(scene, clean);
@@ -649,7 +748,7 @@
       el.topic.textContent = "Generation failed";
       el.summary.textContent = err.message;
       // Re-check which backend is alive — the failure often means the badge
-      // is now stale (Ollama died, Claude key expired, server restarted, etc.).
+      // is now stale (Claude key expired, server restarted, etc.).
       refreshStatus();
     } finally {
       stopElapsed();
@@ -666,11 +765,82 @@
       updatePanels(scene);
     }
     setConfidence(message, "warn");
+    renderDemoControls(null);
     try {
       await runner.run(CLIENT_FALLBACK_CODE);
     } catch (fallbackErr) {
       /* placeholder is hand-written and can't realistically fail */
     }
+  }
+
+  /* ============================================================== */
+  /* Interactive demo parameter controls ("fill in the values")     */
+  /* ============================================================== */
+
+  function demoParams(scene) {
+    const out = {};
+    ((scene && scene.params) || []).forEach((p) => {
+      out[p.name] = p.value;
+    });
+    return out;
+  }
+
+  function fmtNum(v) {
+    return String(Math.round(v * 100) / 100);
+  }
+
+  // Build the live slider panel for a demo scene. A non-demo scene (no params)
+  // hides the panel. Moving a slider updates the worker's `P` global live —
+  // no recompile — so the graph responds as you drag.
+  function renderDemoControls(scene) {
+    let dc = document.getElementById("demoControls");
+    if (!dc) {
+      dc = document.createElement("div");
+      dc.id = "demoControls";
+      dc.className = "demo-controls";
+      el.frame.insertAdjacentElement("afterend", dc);
+    }
+    const params = (scene && scene.params) || [];
+    if (!params.length) {
+      dc.hidden = true;
+      dc.innerHTML = "";
+      return;
+    }
+    dc.hidden = false;
+    dc.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "demo-controls-head";
+    head.textContent = tr("adjust_values");
+    dc.appendChild(head);
+    const grid = document.createElement("div");
+    grid.className = "demo-params";
+    dc.appendChild(grid);
+    params.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "demo-param";
+      const name = document.createElement("span");
+      name.className = "demo-param-name";
+      name.textContent = p.label || p.name;
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = p.min;
+      slider.max = p.max;
+      slider.step = p.step;
+      slider.value = p.value;
+      slider.setAttribute("aria-label", p.label || p.name);
+      const val = document.createElement("span");
+      val.className = "demo-param-val";
+      val.textContent = fmtNum(p.value);
+      slider.addEventListener("input", () => {
+        const v = parseFloat(slider.value);
+        val.textContent = fmtNum(v);
+        runner.setParams({ [p.name]: v });
+      });
+      row.appendChild(name);
+      row.appendChild(slider);
+      row.appendChild(val);
+      grid.appendChild(row);
+    });
   }
 
   async function runSceneWithRepair(scene, prompt) {
@@ -688,9 +858,10 @@
             : `Repair ${attempt}/${MAX_REPAIRS}: trying the fixed code…`,
           "pending"
         );
-        await runner.run(current.code);
+        await runner.run(current.code, demoParams(current));
         state.scene = current;
         updatePanels(current);
+        renderDemoControls(current);
         if (current.is_fallback) {
           // Server gave us a guaranteed-renderable placeholder because the real
           // generator produced blank code three times. Surface it clearly —
@@ -710,10 +881,31 @@
               "Regenerate or rephrase for a better scene.",
             "warn",
           );
+        } else if (current.from_solver) {
+          // Worked solution: animated step-by-step slides for a specific problem.
+          setConfidence(
+            tr("worked_solution"),
+            "ok",
+          );
+        } else if (current.from_chemistry) {
+          // Chemistry: a 3D molecular structure (orbit it) or a balanced
+          // reaction. Known-correct — parsed and computed server-side.
+          setConfidence(
+            current.chem_kind === "balance"
+              ? tr("chem_balance")
+              : tr("chem_molecule"),
+            "ok",
+          );
+        } else if (current.from_demo) {
+          // Interactive curriculum demo — drag the sliders to explore.
+          setConfidence(
+            tr("demo_status", { area: current.area || "Interactive" }),
+            "ok",
+          );
         } else if (current.from_library) {
           // Instant, hand-verified scene from the curated STEM corpus.
           setConfidence(
-            `${current.dimension} • curated STEM scene (instant, verified)` +
+            tr("curated_status", { dimension: current.dimension }) +
               (current.fallback_reason ? " — " + current.fallback_reason : ""),
             "ok",
           );
@@ -762,6 +954,7 @@
             code: current.code,
             error: err.message,
             where: err.where || "",
+            language: currentLanguage(),
           });
         } catch (repairErr) {
           setConfidence("Repair failed: " + repairErr.message, "warn");
@@ -816,7 +1009,7 @@
       else div.removeAttribute("aria-hidden");
       const who = document.createElement("span");
       who.className = "chat-role";
-      who.textContent = msg.role === "user" ? "You" : "Tutor";
+      who.textContent = msg.role === "user" ? tr("you") : tr("tutor");
       const body = document.createElement("p");
       body.className = "chat-body";
       body.innerHTML = renderTutorMarkdown(msg.content);
@@ -843,24 +1036,74 @@
         role: "assistant",
         content:
           `This is "${scene.title}". ${scene.summary} ` +
-          "Ask me anything about what you're seeing, the math behind it, or for a practice problem.",
+          "Ask me anything — or ask me to solve a problem step by step and I'll " +
+          "show what you need, each step, and where it applies.",
       },
     ];
     renderChat();
   }
 
+  // A persistent quick-action that puts the tutor into step-by-step solve mode.
+  // Filling the box (rather than auto-sending) lets the student append their
+  // own numbers first, e.g. "...for v0 = 20 m/s and angle = 30 degrees".
+  const SOLVE_PROMPT = "Solve this step by step: show what's needed, each step, and where it applies.";
+
+  function addSuggestionChip(text, opts) {
+    const btn = document.createElement("button");
+    btn.className = "suggestion-chip" + (opts && opts.solve ? " solve" : "");
+    btn.type = "button";
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      const value = (opts && opts.value) || text;
+      // Scene-explanation chips send immediately — one click, one answer — so
+      // Quick Questions actually *do* something. The solver chip instead FILLS
+      // the box so the student can append their own numbers before pressing Ask.
+      if (opts && opts.send) {
+        sendChat(value);
+        return;
+      }
+      el.chatInput.value = value;
+      // Scroll the chat into view FIRST — the tutor sits below the fold, so
+      // without this the box fills silently and it looks like nothing happened.
+      el.chatInput.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.chatInput.focus({ preventScroll: true });
+      // Put the caret at the end so the student can keep typing their specifics.
+      const v = el.chatInput.value;
+      el.chatInput.setSelectionRange(v.length, v.length);
+    });
+    el.chatSuggestions.appendChild(btn);
+  }
+
   function renderSuggestions(scene) {
     el.chatSuggestions.innerHTML = "";
-    (scene.student_prompts || []).slice(0, 4).forEach((prompt) => {
-      const btn = document.createElement("button");
-      btn.className = "suggestion-chip";
-      btn.type = "button";
-      btn.textContent = prompt;
-      btn.addEventListener("click", () => {
-        el.chatInput.value = prompt;
-        el.chatInput.focus();
+    const hasExplanation =
+      scene && !scene.browser_help && (scene.summary || (scene.bullets || []).length);
+    // Scene-aware questions answered on one click. In the browser edition these
+    // are answered offline from the scene's own explanation; the desktop app
+    // routes them to the real AI tutor.
+    if (hasExplanation) {
+      addSuggestionChip(tr("explain_scene"), {
+        send: true,
+        value: "Explain what I'm seeing in this visualization.",
       });
-      el.chatSuggestions.appendChild(btn);
+      if (scene.params && scene.params.length) {
+        addSuggestionChip(tr("what_sliders"), {
+          send: true,
+          value: "What do the sliders/controls change?",
+        });
+      }
+      if (scene.equation) {
+        addSuggestionChip(tr("equation_mean"), {
+          send: true,
+          value: "What does the equation on screen mean?",
+        });
+      }
+    }
+    // The step-by-step solver — fills the box so numbers can be appended first.
+    addSuggestionChip(tr("solve_steps"), { solve: true, value: SOLVE_PROMPT });
+    // Any scene-provided follow-ups (desktop scenes may include these).
+    (scene.student_prompts || []).slice(0, 3).forEach((prompt) => {
+      addSuggestionChip(prompt);
     });
   }
 
@@ -871,7 +1114,7 @@
     el.sendChat.disabled = true;
 
     state.chat.push({ role: "user", content: clean });
-    state.chat.push({ role: "assistant", content: "Thinking…", pending: true });
+    state.chat.push({ role: "assistant", content: tr("thinking"), pending: true });
     renderChat();
 
     const history = state.chat
@@ -885,6 +1128,7 @@
         question: clean,
         visualization: state.scene || {},
         history: history.slice(0, -1),
+        language: currentLanguage(),
       });
       if (session !== chatSessionId) return; // chat was reset; discard response
       state.chat.pop();
@@ -913,29 +1157,27 @@
       state.health = health;
       const gen = health.generator;
       if (gen === "claude") {
-        el.statusBadge.textContent = "Claude online";
+        el.statusBadge.textContent = "Claude " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.claude.model || "claude");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.claude.model || "claude");
       } else if (gen === "openai") {
-        el.statusBadge.textContent = "ChatGPT online";
+        el.statusBadge.textContent = "ChatGPT " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.openai.model || "openai");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.openai.model || "openai");
       } else if (gen === "gemini") {
-        el.statusBadge.textContent = "Gemini online";
+        el.statusBadge.textContent = "Gemini " + tr("online");
         el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.gemini.model || "gemini");
-      } else if (gen === "ollama") {
-        el.statusBadge.textContent = "Local model";
-        el.statusBadge.className = "status-pill ok";
-        el.modelLabel.textContent = "Generator: " + (health.ollama.selected_model || "ollama");
+        el.modelLabel.textContent = tr("generator") + ": " + (health.gemini.model || "gemini");
       } else {
-        el.statusBadge.textContent = "No generator";
-        el.statusBadge.className = "status-pill error";
+        // No cloud key — the AI relies only on code, so the app still runs the
+        // built-in pure-code library (demos, chemistry, the step-by-step solver).
+        el.statusBadge.textContent = tr("code_only");
+        el.statusBadge.className = "status-pill";
         el.modelLabel.textContent =
-          "Set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY or start Ollama";
+          "Demos, chemistry & solver run offline. Set ANTHROPIC_API_KEY for AI generation.";
       }
     } catch (err) {
-      el.statusBadge.textContent = "Server offline";
+      el.statusBadge.textContent = tr("server_offline");
       el.statusBadge.className = "status-pill error";
       el.modelLabel.textContent = "Could not reach the VisualLM server.";
     }
@@ -1162,10 +1404,10 @@
   el.playPause.addEventListener("click", () => {
     if (runner.paused) {
       runner.resume();
-      el.playPause.textContent = "Pause";
+      el.playPause.textContent = tr("pause");
     } else {
       runner.pause();
-      el.playPause.textContent = "Play";
+      el.playPause.textContent = tr("play");
     }
   });
 
@@ -1272,7 +1514,7 @@
     const isLight = document.documentElement.dataset.theme === "light";
     themeToggle.setAttribute(
       "aria-label",
-      isLight ? "Switch to dark theme" : "Switch to light theme",
+      isLight ? tr("switch_dark") : tr("switch_light"),
     );
   }
   syncThemeToggleLabel();
@@ -1281,6 +1523,7 @@
       const current = document.documentElement.dataset.theme || "dark";
       const next = current === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = next;
+      runner.setTheme(next);
       syncThemeToggleLabel();
       try {
         localStorage.setItem(THEME_KEY, next);
@@ -1291,20 +1534,516 @@
   }
 
   /* ============================================================== */
+  /* Resizable AI Tutor — drag the handle to stretch / shrink it.   */
+  /* The top workspace self-adapts (it's a flex:1 region), and the  */
+  /* chosen height is persisted across sessions. Setting a CSS var  */
+  /* never triggers layout reflow events, so there is no resize     */
+  /* feedback loop / stack overflow here.                           */
+  /* ============================================================== */
+
+  (function setupTutorResizer() {
+    const resizer = $("appResizer");
+    if (!resizer) return;
+    const root = document.documentElement;
+    const KEY = "visuallm-tutor-h";
+    const MIN = 150;
+    const RESERVE = 300; // px always kept for the top workspace + chrome
+    const maxH = () => Math.max(MIN, window.innerHeight - RESERVE);
+    const clampH = (h) => Math.min(maxH(), Math.max(MIN, h));
+    const apply = (h) => root.style.setProperty("--tutor-h", clampH(h) + "px");
+    const current = () =>
+      parseFloat(getComputedStyle(root).getPropertyValue("--tutor-h")) ||
+      Math.min(maxH(), 300);
+    const save = () => {
+      try {
+        localStorage.setItem(KEY, String(Math.round(current())));
+      } catch (e) {
+        /* private mode — non-fatal */
+      }
+    };
+
+    // Re-clamp any restored value to the live viewport (the head bootstrap set
+    // it pre-paint to avoid a flash).
+    const saved = parseFloat(localStorage.getItem(KEY));
+    if (!isNaN(saved)) apply(saved);
+
+    let dragging = false;
+    resizer.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      resizer.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      try {
+        resizer.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      e.preventDefault();
+    });
+    resizer.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      // The tutor's bottom sits ~14px above the viewport bottom (its margin);
+      // its top tracks the pointer. So height = (viewport bottom) − pointerY.
+      apply(window.innerHeight - e.clientY - 14);
+    });
+    const stop = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      document.body.style.userSelect = "";
+      try {
+        resizer.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      save();
+    };
+    resizer.addEventListener("pointerup", stop);
+    resizer.addEventListener("pointercancel", stop);
+
+    // Keyboard a11y: arrows nudge the size when the handle is focused.
+    resizer.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 48 : 16;
+      if (e.key === "ArrowUp") {
+        apply(current() + step);
+        save();
+        e.preventDefault();
+      } else if (e.key === "ArrowDown") {
+        apply(current() - step);
+        save();
+        e.preventDefault();
+      }
+    });
+
+    // Keep the tutor within bounds when the window itself is resized.
+    window.addEventListener("resize", () => apply(current()));
+  })();
+
+  /* ============================================================== */
+  /* Resizable top columns — drag the vertical handles to change the */
+  /* WIDTH of the Explanation / canvas / Prompt cards (height stays  */
+  /* fixed by the app-shell). Widths persist across sessions.        */
+  /* ============================================================== */
+
+  (function setupColumnResizers() {
+    const left = document.querySelector(".left-panel");
+    const right = document.querySelector(".right-panel");
+    if (!left || !right) return;
+    const root = document.documentElement;
+    const clampL = (w) => Math.min(460, Math.max(200, w)); // matches CSS clamp()
+    const clampR = (w) => Math.min(420, Math.max(190, w));
+
+    const restore = (key, prop, clamp) => {
+      try {
+        const v = parseFloat(localStorage.getItem(key));
+        if (!isNaN(v)) root.style.setProperty(prop, clamp(v) + "px");
+      } catch (e) {}
+    };
+    restore("visuallm-col-left", "--col-left", clampL);
+    restore("visuallm-col-right", "--col-right", clampR);
+
+    function wire(handle, side) {
+      if (!handle) return;
+      const prop = side === "left" ? "--col-left" : "--col-right";
+      const key = side === "left" ? "visuallm-col-left" : "visuallm-col-right";
+      const clamp = side === "left" ? clampL : clampR;
+      const width = (clientX) =>
+        side === "left"
+          ? clamp(clientX - left.getBoundingClientRect().left)
+          : clamp(right.getBoundingClientRect().right - clientX);
+      const save = () => {
+        try {
+          localStorage.setItem(
+            key,
+            String(Math.round(parseFloat(getComputedStyle(root).getPropertyValue(prop)) || 280)),
+          );
+        } catch (e) {}
+      };
+      let dragging = false;
+      handle.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        handle.classList.add("dragging");
+        document.body.style.userSelect = "none";
+        document.body.style.cursor = "col-resize";
+        try {
+          handle.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        e.preventDefault();
+      });
+      handle.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        root.style.setProperty(prop, width(e.clientX) + "px");
+      });
+      const stop = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        try {
+          handle.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+        save();
+      };
+      handle.addEventListener("pointerup", stop);
+      handle.addEventListener("pointercancel", stop);
+      // Keyboard a11y: arrows nudge the width. For the left handle, Right grows
+      // the left card; for the right handle, Left grows the right card.
+      handle.addEventListener("keydown", (e) => {
+        const step = e.shiftKey ? 40 : 12;
+        const cur = parseFloat(getComputedStyle(root).getPropertyValue(prop)) || 280;
+        let next = null;
+        if (e.key === "ArrowLeft") next = side === "left" ? cur - step : cur + step;
+        else if (e.key === "ArrowRight") next = side === "left" ? cur + step : cur - step;
+        if (next === null) return;
+        root.style.setProperty(prop, clamp(next) + "px");
+        save();
+        e.preventDefault();
+      });
+    }
+    wire($("colResizerLeft"), "left");
+    wire($("colResizerRight"), "right");
+  })();
+
+  /* ============================================================== */
+  /* Study Packs (DLC) — browse official/custom packs, launch a      */
+  /* demo or experiment, import a .dlc.json. Backend-agnostic: talks  */
+  /* to /api/packs, /api/pack, /api/demo, /api/dlc/import — the       */
+  /* browser shim answers offline; the desktop server answers too.    */
+  /* ============================================================== */
+
+  // Run a fully-formed scene (from a pack) through the normal render+repair
+  // path so it reuses all the panel / tutor / demo-control wiring.
+  async function launchScene(scene, label) {
+    if (state.busy) return;
+    setBusyVisual(true, "Loading…");
+    if (runner.paused) {
+      runner.resume();
+      el.playPause.textContent = "Pause";
+    }
+    try {
+      await runSceneWithRepair(scene, label || scene.title || "");
+      if (el.frame && window.matchMedia("(max-width: 900px)").matches)
+        el.frame.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch (err) {
+      setConfidence("Could not load this demo: " + err.message, "warn");
+    } finally {
+      setBusyVisual(false);
+    }
+  }
+
+  const dlc = {
+    catalog: $("dlcCatalog"),
+    catalogSection: $("dlcCatalogSection"),
+    detailSection: $("dlcDetailSection"),
+    detail: $("dlcDetail"),
+    back: $("dlcBack"),
+    drop: $("dlcDropZone"),
+    file: $("dlcFileInput"),
+    msg: $("dlcImportMsg"),
+    analyze: $("dlcAnalyze"),
+    uploadBlock: $("resourceUploadBlock"),
+  };
+
+  // On a real backend (desktop), the AI-analysis panel becomes an actual
+  // generator; in the browser it stays an explanatory note.
+  function renderAnalyzeForm() {
+    if (!dlc.analyze) return;
+    dlc.analyze.innerHTML =
+      '<p class="section-body">Paste notes or slide text — or a link — and the AI builds a tailored demo pack (one Claude call per topic). It installs here and downloads as a shareable <code>.dlc.json</code>.</p>' +
+      '<textarea id="dlcMaterial" class="dlc-material" rows="4" placeholder="Paste material, or a https:// link…"></textarea>' +
+      '<input id="dlcPackName" class="dlc-name" type="text" placeholder="Pack name (optional)" />' +
+      '<button id="dlcGenerate" type="button" class="action-button primary">Generate pack</button>' +
+      '<p id="dlcAnalyzeMsg" class="dlc-msg" hidden></p>';
+    const materialEl = $("dlcMaterial");
+    const nameEl = $("dlcPackName");
+    const genBtn = $("dlcGenerate");
+    const amsg = $("dlcAnalyzeMsg");
+    const say = (t, err) => {
+      if (!amsg) return;
+      amsg.hidden = false;
+      amsg.textContent = t;
+      amsg.classList.toggle("error", !!err);
+    };
+    genBtn.addEventListener("click", async () => {
+      const raw = (materialEl.value || "").trim();
+      if (!raw) return say("Paste some material or a link first.", true);
+      const body = { name: (nameEl.value || "").trim() };
+      if (/^https?:\/\//i.test(raw)) body.link = raw;
+      else body.material = raw;
+      genBtn.disabled = true;
+      say("Generating… the AI is building a demo per topic. This can take a minute.");
+      try {
+        const res = await postJSON("/api/analyze", body, { retry: false });
+        say("Built “" + (res.pack ? res.pack.name : "pack") + "” — installed and downloaded.");
+        if (res.dlc) downloadDlcZip(res.dlc, res.dlc.id);
+        dlcShowCatalog();
+        dlcLoadCatalog();
+      } catch (e) {
+        say("Analysis failed: " + e.message, true);
+      } finally {
+        genBtn.disabled = false;
+      }
+    });
+  }
+
+  function dlcMsg(text, isError) {
+    if (!dlc.msg) return;
+    dlc.msg.hidden = false;
+    dlc.msg.textContent = text;
+    dlc.msg.classList.toggle("error", !!isError);
+  }
+  function dlcShowCatalog() {
+    if (dlc.detailSection) dlc.detailSection.hidden = true;
+    if (dlc.catalogSection) dlc.catalogSection.hidden = false;
+  }
+
+  async function dlcLoadCatalog() {
+    if (!dlc.catalog) return;
+    try {
+      const data = await fetch("/api/packs").then((r) => r.json());
+      renderPackCards(data.packs || []);
+    } catch (e) {
+      dlc.catalog.innerHTML = '<p class="resource-empty">Packs unavailable.</p>';
+    }
+  }
+
+  function renderPackCards(packs) {
+    dlc.catalog.innerHTML = "";
+    if (!packs.length) {
+      dlc.catalog.innerHTML = '<p class="resource-empty">No packs yet — import one below.</p>';
+      return;
+    }
+    packs.forEach((p) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "dlc-card" + (p.source === "official" ? "" : " custom");
+      card.innerHTML =
+        '<span class="dlc-card-icon">' + escapeHtml(p.icon || "📦") + "</span>" +
+        '<span class="dlc-card-body"><strong>' + escapeHtml(p.name) + "</strong>" +
+        '<span class="dlc-card-meta">' + p.demoCount + " demos" +
+        (p.experimentCount ? " · " + p.experimentCount + " labs" : "") +
+        (p.source !== "official" ? " · custom" : "") + "</span>" +
+        '<span class="dlc-card-desc">' + escapeHtml(p.description || "") + "</span></span>";
+      card.addEventListener("click", () => dlcOpenPack(p.id));
+      dlc.catalog.appendChild(card);
+    });
+  }
+
+  async function dlcOpenPack(id) {
+    try {
+      const pack = await postJSON("/api/pack", { id });
+      renderPackDetail(pack);
+      dlc.catalogSection.hidden = true;
+      dlc.detailSection.hidden = false;
+      dlc.detailSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (e) {
+      dlcMsg("Could not open pack: " + e.message, true);
+    }
+  }
+
+  function dlcDemoRow(d) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dlc-demo";
+    b.innerHTML =
+      "<span>" + escapeHtml(d.title) + "</span>" +
+      (d.equation ? "<code>" + escapeHtml(d.equation) + "</code>" : "");
+    if (d.blurb) b.title = d.blurb;
+    b.addEventListener("click", async () => {
+      const scene = await postJSON("/api/demo", { id: d.id }).catch(() => null);
+      if (scene && !scene.error) {
+        activateTab("explanation");
+        launchScene(scene, d.title);
+      } else {
+        dlcMsg("Could not load “" + d.title + "”.", true);
+      }
+    });
+    return b;
+  }
+
+  function renderPackDetail(pack) {
+    dlc.detail.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "dlc-detail-head";
+    head.innerHTML =
+      '<span class="dlc-card-icon">' + escapeHtml(pack.icon || "📦") + "</span>" +
+      "<div><strong>" + escapeHtml(pack.name) + "</strong>" +
+      ' <button type="button" class="dlc-dl" title="Download this pack as a .dlc.json file">⬇ Download</button>' +
+      (pack.source !== "official"
+        ? ' <button type="button" class="dlc-remove">Remove</button>'
+        : "") +
+      '<p class="dlc-detail-desc">' + escapeHtml(pack.description || "") + "</p></div>";
+    dlc.detail.appendChild(head);
+    const dl = head.querySelector(".dlc-dl");
+    if (dl) dl.addEventListener("click", () => dlcExport(pack.id, pack.name));
+    const rm = head.querySelector(".dlc-remove");
+    if (rm)
+      rm.addEventListener("click", async () => {
+        await postJSON("/api/dlc/remove", { id: pack.id }).catch(() => {});
+        dlcShowCatalog();
+        dlcLoadCatalog();
+      });
+
+    if (pack.experiments && pack.experiments.length) {
+      const h = document.createElement("h4");
+      h.className = "dlc-group-title";
+      h.textContent = "🧪 Experiments";
+      dlc.detail.appendChild(h);
+      pack.experiments.forEach((e) => dlc.detail.appendChild(dlcDemoRow(e)));
+    }
+    (pack.sections || []).forEach((sec) => {
+      const h = document.createElement("h4");
+      h.className = "dlc-group-title";
+      h.textContent = sec.area;
+      dlc.detail.appendChild(h);
+      sec.topics.forEach((tp) => tp.demos.forEach((d) => dlc.detail.appendChild(dlcDemoRow(d))));
+    });
+  }
+
+  function downloadBytes(bytes, filename, mime) {
+    const blob = new Blob([bytes], { type: mime || "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const dlcSlug = (s) => (String(s || "pack").replace(/[^a-z0-9-]+/gi, "-").toLowerCase() || "pack");
+  const dlcSafe = (s) => String(s || "item").replace(/[^a-z0-9_-]+/gi, "-");
+
+  // A DLC is packaged as a browsable folder inside a .zip: manifest.json
+  // (metadata) + demos/<id>.json + experiments/<id>.json. Reassembled on import.
+  function dlcToFiles(dlc) {
+    const manifest = Object.assign({}, dlc);
+    delete manifest.demos;
+    delete manifest.experiments;
+    manifest._layout = "folder/1";
+    const files = [{ name: "manifest.json", text: JSON.stringify(manifest, null, 2) }];
+    (dlc.demos || []).forEach((d) =>
+      files.push({ name: "demos/" + dlcSafe(d.id) + ".json", text: JSON.stringify(d, null, 2) }),
+    );
+    (dlc.experiments || []).forEach((e) =>
+      files.push({ name: "experiments/" + dlcSafe(e.id) + ".json", text: JSON.stringify(e, null, 2) }),
+    );
+    return files;
+  }
+  function filesToDlc(files) {
+    const byName = {};
+    files.forEach((f) => (byName[f.name] = f.text));
+    if (!byName["manifest.json"]) throw new Error("no manifest.json inside the .zip");
+    const dlc = JSON.parse(byName["manifest.json"]);
+    delete dlc._layout;
+    const demos = [];
+    const experiments = [];
+    files.forEach((f) => {
+      if (/^demos\/.+\.json$/i.test(f.name)) demos.push(JSON.parse(f.text));
+      else if (/^experiments\/.+\.json$/i.test(f.name)) experiments.push(JSON.parse(f.text));
+    });
+    if (demos.length) dlc.demos = demos;
+    if (experiments.length) dlc.experiments = experiments;
+    return dlc;
+  }
+  function downloadDlcZip(dlc, id) {
+    if (!window.VisualLMZip) return dlcMsg("Zip support didn't load — reload the page.", true);
+    downloadBytes(window.VisualLMZip.zip(dlcToFiles(dlc)), dlcSlug(id) + ".zip", "application/zip");
+  }
+  async function dlcExport(id, name) {
+    try {
+      const res = await postJSON("/api/dlc/export", { id });
+      downloadDlcZip(res.dlc, id || name);
+    } catch (e) {
+      dlcMsg("Download failed: " + e.message, true);
+    }
+  }
+
+  async function dlcImportFile(file) {
+    if (!file) return;
+    try {
+      let obj;
+      if (/\.zip$/i.test(file.name)) {
+        if (!window.VisualLMZip) throw new Error("zip support didn't load — reload the page");
+        obj = filesToDlc(window.VisualLMZip.unzip(new Uint8Array(await file.arrayBuffer())));
+      } else {
+        obj = JSON.parse(await file.text());
+      }
+      const res = await postJSON("/api/dlc/import", { dlc: obj });
+      dlcMsg("Imported “" + (res.pack ? res.pack.name : obj.name || "pack") + "”.", false);
+      dlcShowCatalog();
+      dlcLoadCatalog();
+    } catch (e) {
+      dlcMsg("Import failed: " + e.message, true);
+    }
+  }
+
+  function initDLC() {
+    if (!dlc.catalog) return;
+    if (dlc.back) dlc.back.addEventListener("click", dlcShowCatalog);
+    if (dlc.file)
+      dlc.file.addEventListener("change", (e) =>
+        dlcImportFile(e.target.files && e.target.files[0]),
+      );
+    if (dlc.drop) {
+      ["dragover", "dragenter"].forEach((ev) =>
+        dlc.drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dlc.drop.classList.add("dragover");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dlc.drop.addEventListener(ev, () => dlc.drop.classList.remove("dragover")),
+      );
+      dlc.drop.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dlcImportFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+      });
+    }
+    // Reveal the desktop analysis uploader only when a real backend is present.
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((h) => {
+        const isServer = h.generator && h.generator !== "browser";
+        if (dlc.uploadBlock) dlc.uploadBlock.hidden = !isServer;
+        if (isServer) renderAnalyzeForm();
+      })
+      .catch(() => {});
+    dlcLoadCatalog();
+  }
+
+  /* ============================================================== */
   /* Boot                                                           */
   /* ============================================================== */
 
+  function localizeIdleState() {
+    if (state.scene) return;
+    el.topic.textContent = tr("waiting");
+    el.dimension.textContent = tr("auto");
+    if (el.summary.dataset.initialI18n) el.summary.textContent = tr(el.summary.dataset.initialI18n);
+    if (el.confidence.dataset.initialI18n) setConfidence(tr(el.confidence.dataset.initialI18n));
+  }
+
+  localizeIdleState();
   refreshStatus();
   fetchResources();
+  initDLC();
   state.chat = [
     {
       role: "assistant",
-      content:
-        "Type any STEM idea or equation and press Visualize. I'll generate a " +
-        "custom animation, then answer questions about it here.",
+      content: tr("coach_welcome"),
     },
   ];
   renderChat();
+
+  window.addEventListener("visuallm:languagechange", () => {
+    localizeIdleState();
+    if (!state.scene && state.chat.length === 1) state.chat[0].content = tr("coach_welcome");
+    el.playPause.textContent = tr(runner.paused ? "play" : "pause");
+    syncThemeToggleLabel();
+    refreshStatus();
+    renderChat();
+    if (state.scene) {
+      renderSuggestions(state.scene);
+      renderDemoControls(state.scene);
+    }
+  });
 
   // NOTE: we intentionally do NOT auto-visualize on load. Every generation
   // costs an AI call (the operator's API credits on a public deployment),

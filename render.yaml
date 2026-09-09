@@ -8,6 +8,9 @@ services:
     name: visuallm
     runtime: docker
     plan: free
+    # Deploy the branch that has the full feature set (chemistry, demos,
+    # physics). Change to main once this branch is merged.
+    branch: parameterized-demos
     healthCheckPath: /api/health
     envVars:
       - key: ANTHROPIC_API_KEY

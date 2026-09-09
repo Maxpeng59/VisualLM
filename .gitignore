@@ -4,3 +4,16 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# macOS app build artifacts (run ./make_app.sh to regenerate)
+VisualLM.app/
+VisualLM.iconset/
+VisualLM.png
+VisualLM.icns
+build/
+dist/
+*.spec.bak
+
+# Runtime user/AI DLC packs (not source)
+data/dlc_custom/
+web/data/dlc_custom/
